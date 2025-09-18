@@ -127,6 +127,8 @@ mean(lag_stats)
 
 For comparison, the same calculation on the pre-whitened residuals is typically much larger.
 
+In this simulation the mean absolute autocorrelation over lags 1–5 drops by several fold after whitening; exact values vary with the random seed, but the whitened summary should be markedly smaller than the raw baseline.
+
 ```{r whiteness-raw}
 lag_stats_raw <- apply(resid, 2, function(y) {
   ac <- acf(y, plot = FALSE, lag.max = 5)$acf[-1]

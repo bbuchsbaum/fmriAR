@@ -45,6 +45,25 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
   drop(out$Y)
 }
 
+.run_avg_acvf <- function(mat, max_lag) {
+  if (!is.matrix(mat)) mat <- as.matrix(mat)
+  n <- nrow(mat)
+  v <- ncol(mat)
+  if (n == 0L || v == 0L) return(rep(0, max(0L, max_lag) + 1L))
+  max_lag <- max(0L, min(as.integer(max_lag), n - 1L))
+  centered <- sweep(mat, 2L, colMeans(mat))
+  out <- numeric(max_lag + 1L)
+  out[1] <- mean(centered^2)
+  if (max_lag >= 1L) {
+    for (lag in seq_len(max_lag)) {
+      rows <- seq_len(n - lag)
+      out[lag + 1L] <- mean(centered[rows + lag, , drop = FALSE] *
+                             centered[rows, , drop = FALSE])
+    }
+  }
+  out
+}
+
 .estimate_ar_series <- function(y, p_max) {
   y <- as.numeric(y)
   y_center <- y - mean(y)
@@ -204,16 +223,40 @@ fit_noise <- function(resid = NULL,
 
   n <- nrow(resid)
   Rsets <- if (is.null(runs)) list(seq_len(n)) else split(seq_len(n), as.integer(runs))
-  series_by_run <- lapply(Rsets, function(idx) rowMeans(resid[idx, , drop = FALSE]))
+  run_mats <- lapply(Rsets, function(idx) resid[idx, , drop = FALSE])
 
-  est_run <- function(y) {
+  est_run <- function(mat) {
     if (method == "ar") {
-      est <- .estimate_ar_series(y, p_max)
-      list(phi = est$phi, theta = numeric(0), order = est$order)
+      n_eff <- nrow(mat)
+      if (n_eff <= 1L) {
+        return(list(phi = numeric(0), theta = numeric(0), order = c(p = 0L, q = 0L)))
+      }
+      p_cap <- min(as.integer(p_max), n_eff - 1L)
+      gamma <- .run_avg_acvf(mat, p_cap)
+      best_phi <- numeric(0)
+      best_order <- c(p = 0L, q = 0L)
+      n_eff_log <- log(n_eff)
+      sigma0 <- pmax(gamma[1], 1e-12)
+      best_bic <- 2 * n_eff * log(sigma0) + n_eff_log
+      if (p_cap >= 1L) {
+        for (pp in seq_len(p_cap)) {
+          gamma_pp <- gamma[seq_len(pp + 1L)]
+          yw <- yw_from_acvf_fast(gamma_pp, pp)
+          sigma2 <- pmax(yw$sigma2, 1e-12)
+          bic <- 2 * n_eff * log(sigma2) + (pp + 1L) * n_eff_log
+          if (bic < best_bic) {
+            best_bic <- bic
+            best_phi <- yw$phi
+            best_order <- c(p = pp, q = 0L)
+          }
+        }
+      }
+      list(phi = best_phi, theta = numeric(0), order = best_order)
     } else {
+      y_mean <- rowMeans(mat)
       pp <- if (identical(p, "auto")) min(2L, p_max) else as.integer(p)
       qq <- as.integer(q)
-      hr_arma(y, p = pp, q = qq, iter = as.integer(hr_iter), step1 = step1)
+      hr_arma(y_mean, p = pp, q = qq, iter = as.integer(hr_iter), step1 = step1)
     }
   }
 
@@ -332,7 +375,7 @@ fit_noise <- function(resid = NULL,
     ))
   }
 
-  estimates <- lapply(series_by_run, est_run)
+  estimates <- lapply(run_mats, est_run)
 
   if (pooling == "global") {
     lens <- vapply(Rsets, length, 0L)
