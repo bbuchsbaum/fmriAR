@@ -53,26 +53,40 @@
   <main id="main" class="col-md-9"><div class="section level1">
 <div class="page-header"><h1 id="fmriar">fmriAR<a class="anchor" aria-label="anchor" href="#fmriar"></a>
 </h1></div>
-<p>Fast AR/ARMA prewhitening for fMRI design and data.</p>
+<p>fmriAR provides fast AR/ARMA-based prewhitening for fMRI GLM workflows. It estimates voxel-wise or parcel-based noise models, applies segment-aware whitening, and exposes diagnostics that make it easy to confirm residual independence.</p>
 <div class="section level2">
-<h2 id="install-dev">Install (dev)<a class="anchor" aria-label="anchor" href="#install-dev"></a>
+<h2 id="key-capabilities">Key capabilities<a class="anchor" aria-label="anchor" href="#key-capabilities"></a>
+</h2>
+<ul>
+<li>Automatic AR/ARMA order selection via Hannan–Rissanen initialization and iterative refinement</li>
+<li>Segment-aware whitening that respects run boundaries and optional multiscale pooling across parcels</li>
+<li>Convenience helpers to whiten design matrices, refit GLMs, and inspect autocorrelation diagnostics</li>
+</ul>
+</div>
+<div class="section level2">
+<h2 id="installation">Installation<a class="anchor" aria-label="anchor" href="#installation"></a>
 </h2>
 <div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="fu">Rcpp</span><span class="fu">::</span><span class="fu"><a href="https://rdrr.io/pkg/Rcpp/man/compileAttributes.html" class="external-link">compileAttributes</a></span><span class="op">(</span><span class="op">)</span></span>
-<span><span class="fu">devtools</span><span class="fu">::</span><span class="fu">document</span><span class="op">(</span><span class="op">)</span></span>
+<code class="sourceCode R"><span><span class="co"># install.packages("remotes")  # only needed once</span></span>
+<span><span class="fu">remotes</span><span class="fu">::</span><span class="fu">install_github</span><span class="op">(</span><span class="st">"bbuchsbaum/fmriAR"</span><span class="op">)</span></span></code></pre></div>
+<p>For local development you can load the package with devtools:</p>
+<div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="fu">devtools</span><span class="fu">::</span><span class="fu">document</span><span class="op">(</span><span class="op">)</span></span>
 <span><span class="fu">devtools</span><span class="fu">::</span><span class="fu">load_all</span><span class="op">(</span><span class="op">)</span></span></code></pre></div>
 </div>
 <div class="section level2">
-<h2 id="example">Example<a class="anchor" aria-label="anchor" href="#example"></a>
+<h2 id="quick-start">Quick start<a class="anchor" aria-label="anchor" href="#quick-start"></a>
 </h2>
-<div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="co"># X: (n x p), Y: (n x v), runs: length n</span></span>
-<span><span class="va">res</span>   <span class="op">&lt;-</span> <span class="va">Y</span> <span class="op">-</span> <span class="va">X</span> <span class="op"><a href="https://rdrr.io/r/base/matmult.html" class="external-link">%*%</a></span> <span class="fu"><a href="https://rdrr.io/r/base/qr.html" class="external-link">qr.solve</a></span><span class="op">(</span><span class="va">X</span>, <span class="va">Y</span><span class="op">)</span></span>
-<span><span class="va">plan</span>  <span class="op">&lt;-</span> <span class="fu"><a href="reference/fit_noise.html">fit_noise</a></span><span class="op">(</span><span class="va">res</span>, runs <span class="op">=</span> <span class="va">runs</span>, method <span class="op">=</span> <span class="st">"ar"</span>, p <span class="op">=</span> <span class="st">"auto"</span>, pooling <span class="op">=</span> <span class="st">"global"</span><span class="op">)</span></span>
-<span><span class="va">xyw</span>   <span class="op">&lt;-</span> <span class="fu"><a href="reference/whiten_apply.html">whiten_apply</a></span><span class="op">(</span><span class="va">plan</span>, <span class="va">X</span>, <span class="va">Y</span>, runs <span class="op">=</span> <span class="va">runs</span><span class="op">)</span></span>
+<div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="co"># X: design matrix (n x p), Y: voxel data (n x v), runs: factor or integer run labels</span></span>
+<span><span class="va">res</span>   <span class="op">&lt;-</span> <span class="va">Y</span> <span class="op">-</span> <span class="va">X</span> <span class="op"><a href="https://rdrr.io/r/base/matmult.html" class="external-link">%*%</a></span> <span class="fu"><a href="https://rdrr.io/r/base/qr.html" class="external-link">qr.solve</a></span><span class="op">(</span><span class="va">X</span>, <span class="va">Y</span><span class="op">)</span>                      <span class="co"># pre-fit residuals</span></span>
+<span><span class="va">plan</span>  <span class="op">&lt;-</span> <span class="fu"><a href="reference/fit_noise.html">fit_noise</a></span><span class="op">(</span><span class="va">res</span>, runs <span class="op">=</span> <span class="va">runs</span>, method <span class="op">=</span> <span class="st">"ar"</span>,    <span class="co"># estimate AR model</span></span>
+<span>                   p <span class="op">=</span> <span class="st">"auto"</span>, pooling <span class="op">=</span> <span class="st">"global"</span><span class="op">)</span></span>
+<span><span class="va">xyw</span>   <span class="op">&lt;-</span> <span class="fu"><a href="reference/whiten_apply.html">whiten_apply</a></span><span class="op">(</span><span class="va">plan</span>, <span class="va">X</span>, <span class="va">Y</span>, runs <span class="op">=</span> <span class="va">runs</span><span class="op">)</span>         <span class="co"># whiten design and data</span></span>
 <span><span class="va">fit</span>   <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/stats/lmfit.html" class="external-link">lm.fit</a></span><span class="op">(</span><span class="va">xyw</span><span class="op">$</span><span class="va">X</span>, <span class="va">xyw</span><span class="op">$</span><span class="va">Y</span><span class="op">)</span></span>
 <span><span class="va">se</span>    <span class="op">&lt;-</span> <span class="fu"><a href="reference/sandwich_from_whitened_resid.html">sandwich_from_whitened_resid</a></span><span class="op">(</span><span class="va">xyw</span><span class="op">$</span><span class="va">X</span>, <span class="va">xyw</span><span class="op">$</span><span class="va">Y</span>, beta <span class="op">=</span> <span class="va">fit</span><span class="op">$</span><span class="va">coefficients</span><span class="op">)</span></span>
 <span><span class="va">ac</span>    <span class="op">&lt;-</span> <span class="fu"><a href="reference/acorr_diagnostics.html">acorr_diagnostics</a></span><span class="op">(</span><span class="va">xyw</span><span class="op">$</span><span class="va">Y</span> <span class="op">-</span> <span class="va">xyw</span><span class="op">$</span><span class="va">X</span> <span class="op"><a href="https://rdrr.io/r/base/matmult.html" class="external-link">%*%</a></span> <span class="va">fit</span><span class="op">$</span><span class="va">coefficients</span><span class="op">)</span></span></code></pre></div>
+<p>See <code>vignettes/</code> and <code><a href="reference/fit_noise.html">?fit_noise</a></code> for more detailed workflows, including multiscale pooling and ARMA whitening.</p>
 </div>
 </div>
   </main><aside class="col-md-3"><div class="license">
