@@ -1,0 +1,17 @@
+^\.Rproj\.user$
+^\.Rhistory$
+^\.RData$
+^\.Renviron$
+^README\.Rmd$
+^README\.html$
+^\.git$
+^\.gitignore$
+^README\.md$
+^\.claude$
+^CLAUDE\.md$
+^repomix-output\.xml$
+^enhancements.md
+^_pkgdown\.yml$
+^docs$
+^pkgdown$
+^\.github$

@@ -1,0 +1,2311 @@
+This file is a merged representation of a subset of the codebase, containing specifically included files, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Only files matching these patterns are included: R/**/*.R, R/**/*.r, *.Rmd, *.rmd, DESCRIPTION, tests/**/*.R, tests/**/*.r
+- Files matching patterns in .gitignore are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+<additional_info>
+
+</additional_info>
+
+</file_summary>
+
+<directory_structure>
+R/
+  acorr.R
+  compat.R
+  fit_and_apply.R
+  fmriAR-package.R
+  hr_arma.R
+  ma_invertibility.R
+  multiscale_fast.R
+  multiscale.R
+  pacf_helpers.R
+  RcppExports.R
+  sandwich.R
+  zzz.R
+tests/
+  testthat/
+    helper-fmriAR.R
+    helper-ms-diagnostics.R
+    test-api-coverage.R
+    test-arima-comparison.R
+    test-arma11-cpp.R
+    test-hr-arma-recovery.R
+    test-ms-nll.R
+    test-ms-stability.R
+    test-ms-whiteness-ks.R
+    test-multiscale.R
+    test-parallel-determinism.R
+    test-segment-edge-ar1.R
+    test-stability-enforcement.R
+    test-whitening.R
+  testthat.R
+DESCRIPTION
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="R/acorr.R">
+#' Autocorrelation diagnostics for residuals
+#'
+#' @param resid Numeric matrix (time x voxels), typically whitened residuals.
+#' @param runs Optional run labels.
+#' @param max_lag Maximum lag to evaluate.
+#' @param aggregate Aggregation across voxels: "mean", "median", or "none".
+#' @return List of autocorrelation values and nominal confidence interval.
+#' @examples
+#' # Generate example residuals with some autocorrelation
+#' n_time <- 200
+#' n_voxels <- 50
+#' resid <- matrix(rnorm(n_time * n_voxels), n_time, n_voxels)
+#'
+#' # Add some AR(1) structure
+#' for (v in 1:n_voxels) {
+#'   resid[, v] <- filter(resid[, v], filter = 0.3, method = "recursive")
+#' }
+#'
+#' # Check autocorrelation
+#' acorr_check <- acorr_diagnostics(resid, max_lag = 10, aggregate = "mean")
+#'
+#' # Examine lag-1 autocorrelation
+#' lag1_acorr <- acorr_check$acf[2]  # First element is lag-0 (always 1)
+#' @export
+acorr_diagnostics <- function(resid, runs = NULL, max_lag = 20L,
+                              aggregate = c("mean", "median", "none")) {
+  stopifnot(is.matrix(resid))
+  aggregate <- match.arg(aggregate)
+  n <- nrow(resid)
+  ci <- 1.96 / sqrt(n)
+
+  acf_one <- function(y) stats::acf(y, lag.max = max_lag, plot = FALSE, demean = TRUE)$acf[-1L]
+
+  if (aggregate == "none") {
+    A <- vapply(seq_len(ncol(resid)), function(j) acf_one(resid[, j]), numeric(max_lag))
+    return(list(lags = seq_len(max_lag), acf = A, ci = ci))
+  }
+
+  ybar <- switch(aggregate,
+                 mean = rowMeans(resid),
+                 median = apply(resid, 1L, stats::median))
+  a <- acf_one(ybar)
+  list(lags = seq_len(max_lag), acf = a, ci = ci)
+}
+</file>
+
+<file path="R/compat.R">
+# compat.R -- small interface layer for fmrireg/fmriAR integration
+
+`%||%` <- function(x, y) if (!is.null(x)) x else y
+
+compat_env <- local({
+
+  plan_from_phi <- function(phi, theta = NULL,
+                            runs = NULL, parcels = NULL,
+                            pooling = c("global","run","parcel"),
+                            exact_first = TRUE,
+                            method = c("ar","arma")) {
+    pooling <- match.arg(pooling)
+    method <- match.arg(method)
+
+    if (pooling %in% c("global","run")) {
+      phi_list   <- if (is.list(phi)) phi else list(phi)
+      theta_list <- if (is.null(theta)) list() else if (is.list(theta)) theta else list(theta)
+      order_vec  <- c(p = max(vapply(phi_list, length, 0L)),
+                      q = max(vapply(theta_list, length, 0L)))
+      return(new_whiten_plan(phi = phi_list,
+                             theta = theta_list,
+                             order = order_vec,
+                             runs = runs,
+                             exact_first = isTRUE(exact_first),
+                             method = method,
+                             pooling = pooling))
+    }
+
+    stopifnot(!is.null(parcels))
+    parcels <- as.integer(parcels)
+
+    if (pooling == "parcel") {
+      stopifnot(is.list(phi))
+      theta_list <- if (is.null(theta))
+        setNames(vector("list", length(phi)), names(phi))
+      else theta
+      order_vec <- c(p = max(vapply(phi, length, 0L)),
+                     q = max(vapply(theta_list, length, 0L)))
+      return(new_whiten_plan(phi = NULL,
+                             theta = NULL,
+                             order = order_vec,
+                             runs = runs,
+                             exact_first = isTRUE(exact_first),
+                             method = method,
+                             pooling = "parcel",
+                             parcels = parcels,
+                             parcel_ids = sort(unique(parcels)),
+                             phi_by_parcel = phi,
+                             theta_by_parcel = theta_list))
+    }
+
+    stop("Unsupported pooling value")
+  }
+
+  whiten_with_phi <- function(X, Y, phi, theta = NULL,
+                              runs = NULL, parcels = NULL,
+                              pooling = c("global","run","parcel"),
+                              exact_first = FALSE,
+                              parallel = TRUE) {
+    plan <- plan_from_phi(phi = phi,
+                          theta = theta,
+                          runs = runs,
+                          parcels = parcels,
+                          pooling = match.arg(pooling),
+                          exact_first = exact_first,
+                          method = if (is.null(theta) || (is.list(theta) && all(vapply(theta, length, 0L) == 0L))) "ar" else "arma")
+    whiten_apply(plan, X, Y, runs = runs, parcels = parcels, parallel = parallel)
+  }
+
+  update_plan <- function(prev_plan, resid, p = NULL, q = NULL, p_max = 6L) {
+    stopifnot(inherits(prev_plan, "fmriAR_plan"))
+    method <- prev_plan$method
+    pooling <- prev_plan$pooling
+    runs <- prev_plan$runs
+    parcels <- prev_plan$parcels
+    p_use <- if (!is.null(p)) p else prev_plan$order[["p"]]
+    q_use <- if (!is.null(q)) q else prev_plan$order[["q"]]
+
+    fit_noise(resid = resid,
+              runs = runs,
+              parcels = parcels,
+              method = method,
+              p = if (!is.null(p_use) && p_use > 0L) as.integer(p_use) else "auto",
+              q = if (!is.null(q_use)) as.integer(q_use) else 0L,
+              p_max = as.integer(p_max),
+              pooling = pooling)
+  }
+
+  plan_info <- function(plan) {
+    stopifnot(inherits(plan, "fmriAR_plan"))
+    phi_mat <- NULL
+    if (!is.null(plan$phi_by_parcel)) {
+      p_ord <- plan$order[["p"]]
+      phi_list <- plan$phi_by_parcel
+      if (p_ord > 0L) {
+        phi_mat <- vapply(phi_list, function(phi) .ms_pad(phi, p_ord), numeric(p_ord))
+      } else {
+        phi_mat <- matrix(0, nrow = 0L, ncol = length(phi_list))
+      }
+    }
+    list(method = plan$method,
+         pooling = plan$pooling,
+         order = plan$order,
+         has_runs = !is.null(plan$runs),
+         has_parcels = !is.null(plan$parcels),
+         n_parcels = if (!is.null(plan$parcels)) length(unique(plan$parcels)) else 0L,
+         phi_by_parcel = phi_mat)
+  }
+
+  whiteness_score <- function(resid, K = 3L, aggregate = c("mean","median")) {
+    aggregate <- match.arg(aggregate)
+    if (!is.matrix(resid)) resid <- as.matrix(resid)
+    scores <- apply(resid, 2L, function(y) {
+      ac <- stats::acf(y, plot = FALSE, lag.max = K, demean = TRUE)$acf[-1L]
+      mean(abs(ac))
+    })
+    if (aggregate == "mean") mean(scores) else stats::median(scores)
+  }
+
+  list(plan_from_phi = plan_from_phi,
+       whiten_with_phi = whiten_with_phi,
+       update_plan = update_plan,
+       plan_info = plan_info,
+       whiteness_score = whiteness_score)
+})
+
+#' fmrireg compatibility interface
+#'
+#' Stable entry points to help upstream packages reuse fmriAR whitening without
+#' rewriting existing pipelines.
+#'
+#' @return A list environment containing compatibility functions:
+#'   \itemize{
+#'     \item \code{plan_from_phi}: Create whitening plan from AR coefficients
+#'     \item \code{whiten_with_phi}: Apply whitening given AR coefficients
+#'     \item \code{update_plan}: Update existing plan with new residuals
+#'     \item \code{plan_info}: Extract information from a plan object
+#'     \item \code{whiteness_score}: Compute whiteness metric from residuals
+#'   }
+#'
+#' @examples
+#' # Create compatibility interface
+#' compat_funcs <- compat
+#'
+#' # Example: Create whitening plan from AR coefficients
+#' phi <- c(0.3, 0.1)  # AR(2) coefficients
+#' plan <- compat_funcs$plan_from_phi(phi, exact_first = TRUE)
+#'
+#' # Example: Compute whiteness score
+#' resid <- matrix(rnorm(100 * 10), 100, 10)
+#' score <- compat_funcs$whiteness_score(resid)
+#'
+#' @keywords internal
+#' @export
+compat <- compat_env
+</file>
+
+<file path="R/fit_and_apply.R">
+# Internal helpers -------------------------------------------------------------
+
+.sub_run_starts <- function(n_run, censor_idx_rel = integer()) {
+  starts <- 1L
+  if (length(censor_idx_rel)) {
+    add <- censor_idx_rel + 1L
+    add <- add[add <= n_run]
+    starts <- sort(unique(c(starts, add)))
+  }
+  as.integer(starts - 1L)
+}
+
+.split_runs <- function(runs) {
+  if (is.null(runs)) return(list(seq_along(integer(0))))
+  runs <- as.integer(runs)
+  split(seq_along(runs), runs)
+}
+
+new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, pooling,
+                            parcels = NULL, parcel_ids = NULL,
+                            phi_by_parcel = NULL, theta_by_parcel = NULL) {
+  structure(
+    list(
+      phi = phi,
+      theta = theta,
+      order = order,
+      runs = runs,
+      exact_first = exact_first,
+      method = method,
+      pooling = pooling,
+      parcels = parcels,
+      parcel_ids = parcel_ids,
+      phi_by_parcel = phi_by_parcel,
+      theta_by_parcel = theta_by_parcel
+    ),
+    class = "fmriAR_plan"
+  )
+}
+
+.arma_innovations <- function(y, phi, theta) {
+  Y <- matrix(as.numeric(y), ncol = 1L)
+  X <- matrix(0, nrow = length(y), ncol = 1L)
+  out <- arma_whiten_inplace(Y, X, phi, theta, run_starts = 0L,
+                             exact_first_ar1 = FALSE, parallel = FALSE)
+  drop(out$Y)
+}
+
+.estimate_ar_series <- function(y, p_max) {
+  y <- as.numeric(y)
+  y_center <- y - mean(y)
+  best <- list(score = Inf, phi = numeric(0), p = 0L)
+  for (pp in 0L:p_max) {
+    if (pp == 0L) {
+      e <- y_center
+      ll <- -length(e) * log(stats::var(e))
+      k <- 1L
+      phi <- numeric(0)
+    } else {
+      acvf <- stats::acf(y_center, lag.max = pp, plot = FALSE, type = "covariance")$acf
+      gamma <- as.numeric(acvf)
+      R <- stats::toeplitz(gamma[1:pp])
+      r <- gamma[2:(pp + 1L)]
+      phi_try <- tryCatch(drop(solve(R, r)), error = function(e) rep(0, pp))
+      phi_try <- enforce_stationary_ar(phi_try, 0.99)
+      e <- stats::filter(y_center, c(1, -phi_try), method = "recursive")
+      e <- e[!is.na(e)]
+      ll <- -length(e) * log(mean(e^2))
+      k <- pp + 1L
+      phi <- phi_try
+    }
+    n0 <- length(y_center)
+    bic <- -2 * ll + k * log(n0)
+    if (bic < best$score) best <- list(score = bic, phi = if (pp > 0) phi else numeric(0), p = pp)
+  }
+  list(phi = best$phi, order = c(p = best$p, q = 0L))
+}
+
+.full_run_starts <- function(runs, censor, n) {
+  starts <- 1L
+  if (!is.null(runs)) {
+    runs <- as.integer(runs)
+    starts <- sort(unique(c(starts, which(diff(runs) != 0L) + 1L)))
+  }
+  if (!is.null(censor) && length(censor)) {
+    censor <- sort(unique(as.integer(censor)))
+    extra <- censor + 1L
+    extra <- extra[extra <= n]
+    starts <- sort(unique(c(starts, extra)))
+  }
+  as.integer(starts - 1L)
+}
+
+.runs_from_starts0 <- function(run_starts0, n) {
+  rs <- sort(unique(as.integer(run_starts0)))
+  if (!length(rs) || rs[1] != 0L) stop("run_starts must include 0")
+  if (rs[length(rs)] == n) rs <- rs[-length(rs)]
+  if (!length(rs) || rs[length(rs)] >= n) stop("run_starts out of bounds")
+  rs1 <- rs + 1L
+  bounds <- c(rs1, n + 1L)
+  runs <- integer(n)
+  for (i in seq_along(rs1)) {
+    runs[seq(rs1[i], bounds[i + 1L] - 1L)] <- i
+  }
+  runs
+}
+
+# Exported API -----------------------------------------------------------------
+
+#' Fit an AR/ARMA noise model (run-aware) and return a whitening plan
+#'
+#' @param resid Numeric matrix (time x voxels) of residuals from an initial OLS fit.
+#' @param Y Optional data matrix used to compute residuals when `resid` is omitted.
+#' @param X Optional design matrix used with `Y` to compute residuals.
+#' @param runs Optional integer vector of run identifiers.
+#' @param method Either "ar" or "arma".
+#' @param p AR order (integer or "auto" if method == "ar").
+#' @param q MA order (integer).
+#' @param p_max Maximum AR order when `p = "auto"`.
+#' @param exact_first Apply exact AR(1) scaling at segment starts ("ar1" or "none").
+#' @param pooling Combine parameters across runs or parcels ("global", "run", "parcel").
+#' @param parcels Integer vector (length = ncol(resid)) giving fine parcel memberships when `pooling = "parcel"`.
+#' @param parcel_sets Optional named list with entries `coarse`, `medium`, `fine` of equal length specifying nested parcel labels for multi-scale pooling.
+#' @param multiscale Multi-scale pooling mode when `parcel_sets` is supplied ("pacf_weighted" or "acvf_pooled"), or `TRUE/FALSE` to toggle pooling.
+#' @param ms_mode Explicit multiscale mode when `multiscale` is logical.
+#' @param p_target Target AR order for multi-scale pooling (defaults to `p_max`).
+#' @param beta Size exponent for multi-scale weights (default 0.5).
+#' @param hr_iter Number of Hannan--Rissanen refinement iterations for ARMA.
+#' @param step1 Preliminary high-order AR fit method for HR ("burg" or "yw").
+#' @param parallel Reserved for future parallel estimation (logical).
+#' @return An object of class `fmriAR_plan` used by [whiten_apply()].
+#' @examples
+#' # Generate example data with AR(1) structure
+#' n_time <- 200
+#' n_voxels <- 50
+#' phi_true <- 0.5
+#'
+#' # Simulate residuals with AR(1) structure
+#' resid <- matrix(0, n_time, n_voxels)
+#' for (v in 1:n_voxels) {
+#'   e <- rnorm(n_time)
+#'   resid[1, v] <- e[1]
+#'   for (t in 2:n_time) {
+#'     resid[t, v] <- phi_true * resid[t-1, v] + e[t]
+#'   }
+#' }
+#'
+#' # Fit AR model
+#' plan <- fit_noise(resid, method = "ar", p = 1)
+#'
+#' # With multiple runs
+#' runs <- rep(1:2, each = 100)
+#' plan_runs <- fit_noise(resid, runs = runs, method = "ar", pooling = "run")
+#' @export
+fit_noise <- function(resid = NULL,
+                      Y = NULL,
+                      X = NULL,
+                      runs = NULL,
+                      method = c("ar", "arma"),
+                      p = "auto",
+                      q = 0L,
+                      p_max = 6L,
+                      exact_first = c("ar1", "none"),
+                      pooling = c("global", "run", "parcel"),
+                      parcels = NULL,
+                      parcel_sets = NULL,
+                      multiscale = c("pacf_weighted", "acvf_pooled"),
+                      ms_mode = NULL,
+                      p_target = NULL,
+                      beta = 0.5,
+                      hr_iter = 0L,
+                      step1 = c("burg", "yw"),
+                      parallel = FALSE) {
+
+  if (is.null(resid)) {
+    if (!is.null(Y) && !is.null(X)) {
+      if (!is.matrix(Y)) Y <- as.matrix(Y)
+      if (!is.matrix(X)) X <- as.matrix(X)
+      stopifnot(nrow(Y) == nrow(X))
+      coef <- qr.solve(X, Y)
+      resid <- Y - X %*% coef
+    } else {
+      stop("fit_noise: supply 'resid' or both 'Y' and 'X'")
+    }
+  }
+
+  stopifnot(is.matrix(resid))
+  method <- match.arg(method)
+  exact_first <- match.arg(exact_first)
+  pooling <- match.arg(pooling)
+  step1 <- match.arg(step1)
+
+  ms_modes <- c("pacf_weighted", "acvf_pooled")
+  multiscale_mode <- NULL
+  if (is.logical(multiscale)) {
+    if (isTRUE(multiscale)) {
+      multiscale_mode <- if (is.null(ms_mode)) "pacf_weighted" else match.arg(ms_mode, ms_modes)
+    }
+  } else {
+    multiscale_mode <- match.arg(multiscale, ms_modes)
+  }
+  if (!is.null(ms_mode) && (!is.logical(multiscale) || isTRUE(multiscale))) {
+    multiscale_mode <- match.arg(ms_mode, ms_modes)
+  }
+
+  n <- nrow(resid)
+  Rsets <- if (is.null(runs)) list(seq_len(n)) else split(seq_len(n), as.integer(runs))
+  series_by_run <- lapply(Rsets, function(idx) rowMeans(resid[idx, , drop = FALSE]))
+
+  est_run <- function(y) {
+    if (method == "ar") {
+      est <- .estimate_ar_series(y, p_max)
+      list(phi = est$phi, theta = numeric(0), order = est$order)
+    } else {
+      pp <- if (identical(p, "auto")) min(2L, p_max) else as.integer(p)
+      qq <- as.integer(q)
+      hr_arma(y, p = pp, q = qq, iter = as.integer(hr_iter), step1 = step1)
+    }
+  }
+
+  if (pooling == "parcel") {
+    if (!identical(method, "ar")) stop("Parcel pooling currently supports method = 'ar' only")
+    stopifnot(!is.null(parcels))
+    parcels <- as.integer(parcels)
+    stopifnot(length(parcels) == ncol(resid))
+
+    run_starts0 <- .full_run_starts(runs, censor = NULL, n = n)
+
+    estimator <- function(y) .estimate_ar_series(y, p_max)
+    M_fine <- .parcel_means(resid, parcels)
+
+    target <- if (is.null(p_target)) p_max else min(as.integer(p_target), p_max)
+
+    if (is.null(parcel_sets)) {
+      est_f <- .ms_estimate_scale(M_fine, estimator, run_starts0)
+      if (is.null(multiscale_mode) || target == 0L) {
+        phi_parcel <- est_f$phi
+      } else if (identical(multiscale_mode, "pacf_weighted")) {
+        shrink <- 0.6
+        kap_mat <- vapply(est_f$phi, function(phi) .ms_pad(ar_to_pacf(phi), target), numeric(target))
+        avg_kap <- if (target > 0L) rowMeans(kap_mat, na.rm = TRUE) else numeric(0)
+        avg_kap <- pmin(pmax(avg_kap, -0.99), 0.99)
+        phi_parcel <- lapply(est_f$phi, function(phi) {
+          kap_f <- .ms_pad(ar_to_pacf(phi), target)
+          kap_mix <- (1 - shrink) * kap_f + shrink * avg_kap
+          pacf_to_ar(pmin(pmax(kap_mix, -0.99), 0.99))
+        })
+      } else {
+        shrink <- 0.6
+        acvf_mat <- vapply(est_f$acvf, function(g) .ms_pad(g, target + 1L), numeric(target + 1L))
+        avg_g <- rowMeans(acvf_mat, na.rm = TRUE)
+        phi_parcel <- lapply(est_f$acvf, function(g) {
+          g_pad <- .ms_pad(g, target + 1L)
+          g_mix <- (1 - shrink) * g_pad + shrink * avg_g
+          yw <- yw_from_acvf_fast(g_mix, target)
+          enforce_stationary_ar(yw$phi)
+        })
+      }
+    } else {
+      required_keys <- c("coarse", "medium", "fine")
+      stopifnot(all(required_keys %in% names(parcel_sets)))
+      parcels_coarse <- as.integer(parcel_sets$coarse)
+      parcels_medium <- as.integer(parcel_sets$medium)
+      parcels_fine <- as.integer(parcel_sets$fine)
+      stopifnot(length(parcels_coarse) == ncol(resid))
+      stopifnot(length(parcels_medium) == ncol(resid))
+      stopifnot(all(parcels_fine == parcels))
+
+      M_coarse <- .parcel_means(resid, parcels_coarse)
+      M_medium <- .parcel_means(resid, parcels_medium)
+      est_c <- .ms_estimate_scale(M_coarse, estimator, run_starts0)
+      est_m <- .ms_estimate_scale(M_medium, estimator, run_starts0)
+      est_f <- .ms_estimate_scale(M_fine, estimator, run_starts0)
+
+      parents <- .ms_parent_maps(parcels_fine, parcels_medium, parcels_coarse)
+      sizes <- list(
+        n_t = nrow(resid),
+        n_runs = if (is.null(runs)) 1L else length(unique(as.integer(runs))),
+        beta = beta,
+        coarse = as.list(table(parcels_coarse)),
+        medium = as.list(table(parcels_medium)),
+        fine = as.list(table(parcels_fine))
+      )
+      disp_list <- list(
+        coarse = .ms_dispersion(resid, parcels_coarse),
+        medium = .ms_dispersion(resid, parcels_medium),
+        fine = .ms_dispersion(resid, parcels_fine)
+      )
+      if (is.null(multiscale_mode)) {
+        phi_parcel <- est_f$phi
+      } else {
+        phi_parcel <- .ms_combine_to_fine(
+          phi_by_coarse = est_c$phi,
+          phi_by_medium = est_m$phi,
+          phi_by_fine   = est_f$phi,
+          acvf_by_coarse = if (identical(multiscale_mode, "acvf_pooled")) est_c$acvf else NULL,
+          acvf_by_medium = if (identical(multiscale_mode, "acvf_pooled")) est_m$acvf else NULL,
+          acvf_by_fine   = if (identical(multiscale_mode, "acvf_pooled")) est_f$acvf else NULL,
+          parents = parents,
+          sizes = sizes,
+          disp_list = disp_list,
+          p_target = target,
+          mode = multiscale_mode
+        )
+      }
+    }
+
+    if (is.null(multiscale_mode) && !is.null(p_target) && target > 0L) {
+      phi_parcel <- mapply(function(phi, g) {
+        g_pad <- .ms_pad(g, target + 1L)
+        yw <- yw_from_acvf_fast(g_pad, target)
+        enforce_stationary_ar(yw$phi)
+      }, phi_parcel, est_f$acvf, SIMPLIFY = FALSE)
+    }
+
+    theta_parcel <- setNames(vector("list", length(phi_parcel)), names(phi_parcel))
+    order_vec <- c(p = max(vapply(phi_parcel, length, 0L)), q = 0L)
+
+    parcel_ids <- names(phi_parcel)
+    if (is.null(parcel_ids)) parcel_ids <- as.character(sort(unique(parcels)))
+    return(new_whiten_plan(
+      phi = NULL,
+      theta = NULL,
+      order = order_vec,
+      runs = runs,
+      exact_first = (exact_first == "ar1"),
+      method = method,
+      pooling = "parcel",
+      parcels = parcels,
+      parcel_ids = parcel_ids,
+      phi_by_parcel = phi_parcel,
+      theta_by_parcel = theta_parcel
+    ))
+  }
+
+  estimates <- lapply(series_by_run, est_run)
+
+  if (pooling == "global") {
+    lens <- vapply(Rsets, length, 0L)
+    pmax_len <- max(vapply(estimates, function(e) length(e$phi), 0L))
+    qmax_len <- max(vapply(estimates, function(e) length(e$theta), 0L))
+    Phi <- matrix(0, length(estimates), pmax_len)
+    Th <- matrix(0, length(estimates), qmax_len)
+    for (i in seq_along(estimates)) {
+      if (length(estimates[[i]]$phi))   Phi[i, seq_along(estimates[[i]]$phi)]   <- estimates[[i]]$phi
+      if (length(estimates[[i]]$theta)) Th[i, seq_along(estimates[[i]]$theta)] <- estimates[[i]]$theta
+    }
+    w <- lens / sum(lens)
+    phi_list <- list(as.numeric(drop(crossprod(w, Phi))))
+    theta_list <- list(as.numeric(drop(crossprod(w, Th))))
+  } else {
+    phi_list <- lapply(estimates, `[[`, "phi")
+    theta_list <- lapply(estimates, `[[`, "theta")
+  }
+
+  order_vec <- if (pooling == "global") {
+    c(p = length(phi_list[[1]]), q = length(theta_list[[1]]))
+  } else {
+    c(p = max(vapply(phi_list, length, 0L)), q = max(vapply(theta_list, length, 0L)))
+  }
+
+  new_whiten_plan(
+    phi = phi_list,
+    theta = theta_list,
+    order = order_vec,
+    runs = runs,
+    exact_first = (exact_first == "ar1"),
+    method = method,
+    pooling = pooling
+  )
+}
+
+#' Apply a whitening plan to design and data matrices
+#'
+#' @param plan Whitening plan from [fit_noise()].
+#' @param X Numeric matrix of predictors (time x regressors).
+#' @param Y Numeric matrix of data (time x voxels).
+#' @param runs Optional run labels.
+#' @param run_starts Optional 0-based run start indices (alternative to `runs`).
+#' @param censor Optional indices of censored TRs (1-based); filter resets after gaps.
+#' @param parcels Optional parcel labels (length = ncol(Y)) when using parcel plans.
+#' @param inplace Modify inputs in place (logical).
+#' @param parallel Use OpenMP parallelism if available.
+#' @return List with whitened data. Parcel plans return `X_by` per parcel; others return a single `X` matrix.
+#' @examples
+#' # Create example design matrix and data
+#' n_time <- 200
+#' n_pred <- 3
+#' n_voxels <- 50
+#' X <- matrix(rnorm(n_time * n_pred), n_time, n_pred)
+#' Y <- X %*% matrix(rnorm(n_pred * n_voxels), n_pred, n_voxels) +
+#'      matrix(rnorm(n_time * n_voxels), n_time, n_voxels)
+#'
+#' # Fit noise model from residuals
+#' residuals <- Y - X %*% solve(crossprod(X), crossprod(X, Y))
+#' plan <- fit_noise(residuals, method = "ar", p = 2)
+#'
+#' # Apply whitening
+#' whitened <- whiten_apply(plan, X, Y)
+#' Xw <- whitened$X
+#' Yw <- whitened$Y
+#' @export
+whiten_apply <- function(plan, X, Y, runs = NULL, run_starts = NULL, censor = NULL, parcels = NULL,
+                         inplace = FALSE, parallel = TRUE) {
+  stopifnot(inherits(plan, "fmriAR_plan"))
+  if (!is.matrix(X)) X <- as.matrix(X)
+  if (!is.matrix(Y)) Y <- as.matrix(Y)
+  if (anyNA(X) || anyNA(Y)) {
+    stop("whiten_apply: NA values detected in X or Y")
+  }
+  n <- nrow(X)
+  stopifnot(nrow(Y) == n)
+
+  if (!is.null(run_starts)) run_starts <- as.integer(run_starts)
+  if (is.null(runs) && !is.null(run_starts)) {
+    runs <- .runs_from_starts0(run_starts, n)
+  }
+  if (is.null(runs) && !is.null(plan$runs) && length(plan$runs) == n) runs <- plan$runs
+  if (is.null(runs)) runs <- rep_len(1L, n)
+
+  if (identical(plan$pooling, "parcel")) {
+    parcels_vec <- plan$parcels
+    if (!is.null(parcels)) {
+      stopifnot(length(parcels) == ncol(Y))
+      parcels_vec <- as.integer(parcels)
+    }
+    stopifnot(!is.null(parcels_vec))
+    stopifnot(length(parcels_vec) == ncol(Y))
+
+    run_starts_vec <- .full_run_starts(runs, censor, n)
+    parcel_ids <- if (!is.null(plan$parcel_ids)) plan$parcel_ids else sort(unique(parcels_vec))
+    phi_by <- plan$phi_by_parcel
+    theta_by <- plan$theta_by_parcel
+
+    Yw <- matrix(NA_real_, n, ncol(Y))
+    X_by <- setNames(vector("list", length(parcel_ids)), as.character(parcel_ids))
+    X_base <- X
+
+    for (pid in parcel_ids) {
+      cols <- which(parcels_vec == pid)
+      if (!length(cols)) next
+      key <- as.character(pid)
+      phi <- phi_by[[key]]
+      if (is.null(phi)) phi <- numeric(0)
+      theta <- theta_by[[key]]
+      if (is.null(theta)) theta <- numeric(0)
+      Y_sub <- Y[, cols, drop = FALSE]
+      X_sub <- X_base
+      out <- arma_whiten_inplace(
+        Y = Y_sub,
+        X = X_sub,
+        phi = phi,
+        theta = theta,
+        run_starts = run_starts_vec,
+        exact_first_ar1 = isTRUE(plan$exact_first),
+        parallel = parallel
+      )
+      Yw[, cols] <- out$Y
+      X_by[[key]] <- out$X
+    }
+
+    if (inplace) {
+      Y[,] <- Yw
+      return(invisible(list(X = NULL, X_by = X_by, Y = Y)))
+    }
+    return(list(X = NULL, X_by = X_by, Y = Yw))
+  }
+
+  rsplits <- split(seq_len(n), as.integer(runs))
+
+  censor_by_run <- lapply(rsplits, function(idx) integer(0L))
+  if (!is.null(censor)) {
+    censor <- as.integer(censor)
+    for (ri in seq_along(rsplits)) {
+      idx <- rsplits[[ri]]
+      c_in <- intersect(censor, idx)
+      if (length(c_in)) censor_by_run[[ri]] <- as.integer(c_in - min(idx) + 1L)
+    }
+  }
+
+  phi_list <- if (length(plan$phi) == 1L) rep(plan$phi, length(rsplits)) else plan$phi
+  theta_list <- if (length(plan$theta) == 1L) rep(plan$theta, length(rsplits)) else plan$theta
+
+  Xw_list <- vector("list", length(rsplits))
+  Yw_list <- vector("list", length(rsplits))
+
+  for (ri in seq_along(rsplits)) {
+    idx <- rsplits[[ri]]
+    Xr <- X[idx, , drop = FALSE]
+    Yr <- Y[idx, , drop = FALSE]
+    rs <- .sub_run_starts(n_run = nrow(Xr), censor_idx_rel = censor_by_run[[ri]])
+    out <- arma_whiten_inplace(
+      Yr,
+      Xr,
+      phi = phi_list[[ri]],
+      theta = theta_list[[ri]],
+      run_starts = rs,
+      exact_first_ar1 = isTRUE(plan$exact_first),
+      parallel = parallel
+    )
+    Xw_list[[ri]] <- out$X
+    Yw_list[[ri]] <- out$Y
+  }
+
+  Xw <- do.call(rbind, Xw_list)
+  Yw <- do.call(rbind, Yw_list)
+
+  if (inplace) {
+    X[,] <- Xw
+    Y[,] <- Yw
+    invisible(list(X = X, Y = Y))
+  } else {
+    list(X = Xw, Y = Yw)
+  }
+}
+
+#' Fit and apply whitening in one call
+#'
+#' @param X Design matrix (time x regressors).
+#' @param Y Data matrix (time x voxels).
+#' @param runs Optional run labels.
+#' @param censor Optional censor indices.
+#' @param ... Additional parameters passed to [fit_noise()].
+#' @return List with whitened `X` and `Y` matrices.
+#' @examples
+#' # Create example data
+#' n_time <- 200
+#' n_pred <- 3
+#' n_voxels <- 50
+#' X <- matrix(rnorm(n_time * n_pred), n_time, n_pred)
+#' Y <- X %*% matrix(rnorm(n_pred * n_voxels), n_pred, n_voxels) +
+#'      matrix(rnorm(n_time * n_voxels, sd = 2), n_time, n_voxels)
+#'
+#' # One-step whitening
+#' whitened <- whiten(X, Y, method = "ar", p = 2)
+#' @export
+whiten <- function(X, Y, runs = NULL, censor = NULL, ...) {
+  res <- Y - X %*% qr.solve(X, Y)
+  plan <- fit_noise(resid = res, runs = runs, ...)
+  whiten_apply(plan, X, Y, runs = runs, censor = censor)
+}
+</file>
+
+<file path="R/fmriAR-package.R">
+#' @keywords internal
+#' @useDynLib fmriAR, .registration = TRUE
+#' @importFrom Rcpp evalCpp
+#' @importFrom stats setNames
+"_PACKAGE"
+
+#' @title fmriAR: Fast AR/ARMA prewhitening for fMRI
+#' @description
+#' Estimate AR/ARMA noise models from residuals and apply matched GLS
+#' prewhitening to fMRI design and data matrices. Run-aware and censor-aware.
+#'
+#' @details
+#' The fmriAR package provides efficient implementations for:
+#' \itemize{
+#'   \item AR and ARMA model estimation from fMRI residuals
+#'   \item Run-aware and censor-aware whitening transformations
+#'   \item Parcel-based parameter pooling
+#'   \item Sandwich standard error computation
+#' }
+#'
+#' @seealso
+#' Useful links:
+#' \itemize{
+#'   \item \code{\link{fit_noise}} for noise model estimation
+#'   \item \code{\link{whiten_apply}} for applying whitening transformations
+#'   \item \code{\link{whiten}} for one-step whitening
+#' }
+#'
+#' @name fmriAR-package
+#' @aliases fmriAR
+NULL
+</file>
+
+<file path="R/hr_arma.R">
+#' @keywords internal
+.lag_matrix <- function(x, k) {
+  n <- length(x)
+  if (k == 0L) return(matrix(numeric(0), n, 0L))
+  M <- matrix(NA_real_, n, k)
+  for (i in 1L:k) M[(i + 1L):n, i] <- x[1L:(n - i)]
+  M
+}
+
+#' @keywords internal
+hr_arma <- function(y, p, q,
+                    p_big = NULL,
+                    step1 = c("burg", "yw"),
+                    iter = 0L,
+                    ar_pacf_bound = 0.99,
+                    enforce = TRUE) {
+  stopifnot(is.numeric(y), length(p) == 1L, length(q) == 1L, p >= 0L, q >= 0L)
+  use_cpp <- isTRUE(getOption("fmriAR.use_cpp_hr", TRUE))
+
+  res <- NULL
+  cpp_ok <- FALSE
+  if (use_cpp) {
+    res <- try(hr_arma_fit_cpp(as.numeric(y), as.integer(p), as.integer(q),
+                               if (is.null(p_big)) 0L else as.integer(p_big),
+                               as.integer(iter)),
+               silent = TRUE)
+    if (!inherits(res, "try-error")) {
+      cpp_ok <- isTRUE(res$ok)
+    }
+  }
+
+  if (!use_cpp || inherits(res, "try-error") || !cpp_ok) {
+    res <- hr_arma_R(y, p, q,
+                     p_big = p_big,
+                     step1 = step1,
+                     iter = iter,
+                     ar_pacf_bound = ar_pacf_bound,
+                     enforce = FALSE)
+    res$ok <- TRUE
+  }
+
+  phi   <- res$phi
+  theta <- res$theta
+  if (enforce) {
+    if (length(phi))   phi   <- enforce_stationary_ar(phi, bound = ar_pacf_bound)
+    if (length(theta)) theta <- enforce_invertible_ma(theta)
+  }
+
+  list(phi = as.numeric(phi),
+       theta = as.numeric(theta),
+       sigma2 = as.numeric(res$sigma2),
+       order = c(p = as.integer(p), q = as.integer(q)),
+       method = "hr",
+       p_big = as.integer(res$p_big),
+       iterations = as.integer(res$iter))
+}
+
+#' @keywords internal
+hr_arma_R <- function(y, p, q,
+                      p_big = NULL,
+                      step1 = c("burg", "yw"),
+                      iter = 0L,
+                      ar_pacf_bound = 0.99,
+                      enforce = TRUE) {
+  step1 <- match.arg(step1)
+  y <- as.numeric(y) - mean(y)
+  n <- length(y)
+  if (n < 10L) stop("Series too short for HR estimation")
+
+  if (is.null(p_big)) {
+    p_big <- max(8L, p + q + 5L, ceiling(10 * log10(n)))
+    p_big <- min(p_big, max(2L, n - 2L), 40L)
+  }
+
+  arfit <- stats::ar(y, aic = FALSE, order.max = p_big, method = step1)
+  ehat <- as.numeric(arfit$resid)
+  ehat[is.na(ehat)] <- 0
+
+  phi <- if (p > 0L) numeric(p) else numeric(0)
+  theta <- if (q > 0L) numeric(q) else numeric(0)
+
+  for (ii in 0L:iter) {
+    Ylags <- if (p > 0L) .lag_matrix(y, p) else matrix(numeric(0), n, 0L)
+    Elags <- if (q > 0L) .lag_matrix(ehat, q) else matrix(numeric(0), n, 0L)
+    m <- max(p, q)
+    idx <- seq.int(m + 1L, n)
+    Z <- cbind(Ylags[idx, , drop = FALSE], Elags[idx, , drop = FALSE])
+    z_y <- y[idx]
+    if (nrow(Z) < (ncol(Z) + 1L)) stop("Not enough data for the requested (p,q)")
+    coef <- tryCatch(qr.solve(Z, z_y), error = function(e) NA)
+    if (anyNA(coef)) stop("HR regression failed")
+    if (p > 0L)  phi   <- coef[seq_len(p)]
+    if (q > 0L)  theta <- coef[p + seq_len(q)]
+    ehat <- .arma_innovations(y, phi, theta)
+  }
+
+  if (enforce) {
+    if (length(phi))   phi   <- enforce_stationary_ar(phi, bound = ar_pacf_bound)
+    if (length(theta)) theta <- enforce_invertible_ma(theta)
+  }
+
+  list(phi = phi,
+       theta = theta,
+       sigma2 = mean(ehat^2),
+       p_big = p_big,
+       iter = iter)
+}
+</file>
+
+<file path="R/ma_invertibility.R">
+#' @keywords internal
+.coeff_from_roots <- function(roots) {
+  coeffs <- 1 + 0i
+  for (r in roots) coeffs <- c(coeffs, 0 + 0i) + (-1 / r) * c(0 + 0i, coeffs)
+  Re(coeffs)
+}
+
+#' @keywords internal
+enforce_invertible_ma <- function(theta, tol = 1e-8) {
+  q <- length(theta)
+  if (q == 0L) return(theta)
+  r <- polyroot(c(1, theta))
+  if (!length(r)) return(theta)
+  r_new <- r
+  for (i in seq_along(r)) {
+    if (Mod(r[i]) <= 1 + tol) r_new[i] <- 1 / Conj(r[i])
+  }
+  as.numeric(.coeff_from_roots(r_new)[-1L])
+}
+</file>
+
+<file path="R/multiscale_fast.R">
+#' @keywords internal
+parcel_means_fast <- function(resid, parcels, na.rm = FALSE) {
+  stopifnot(is.matrix(resid), length(parcels) == ncol(resid))
+  parcels <- as.integer(parcels)
+  ids <- sort(unique(parcels))
+  idx <- match(parcels, ids)
+  K <- length(ids)
+
+  use_cpp <- isTRUE(getOption("fmriAR.use_cpp_means", TRUE)) && exists("parcel_means_cpp")
+  if (use_cpp) {
+    out <- parcel_means_cpp(resid, idx, K = K, na_rm = na.rm)
+  } else {
+    n <- nrow(resid)
+    sums <- matrix(0, n, K)
+    if (!na.rm) {
+      counts <- tabulate(idx, nbins = K)
+      for (j in seq_len(ncol(resid))) {
+        k <- idx[j]
+        sums[, k] <- sums[, k] + resid[, j]
+      }
+      out <- sweep(sums, 2L, pmax(counts, 1L), `/`, check.margin = FALSE)
+    } else {
+      counts <- matrix(0L, nrow = n, ncol = K)
+      for (j in seq_len(ncol(resid))) {
+        k <- idx[j]
+        x <- resid[, j]
+        ok <- !is.na(x)
+        sums[ok, k] <- sums[ok, k] + x[ok]
+        counts[ok, k] <- counts[ok, k] + 1L
+      }
+      counts[counts == 0L] <- 1L
+      out <- sums / counts
+    }
+  }
+
+  colnames(out) <- as.character(ids)
+  out
+}
+
+#' @keywords internal
+segmented_acvf_fast <- function(y, run_starts0, max_lag, unbiased = FALSE, center = TRUE) {
+  stopifnot(is.numeric(y))
+  run_starts0 <- as.integer(run_starts0)
+  if (length(run_starts0) == 0L || run_starts0[1] != 0L)
+    stop("run_starts must be 0-based and start at 0")
+  segmented_acvf_cpp(y, run_starts0, as.integer(max_lag), unbiased = unbiased, center = center)
+}
+
+#' @keywords internal
+yw_from_acvf_fast <- function(gamma, p) {
+  stopifnot(is.numeric(gamma), length(gamma) >= p + 1L)
+  res <- yw_from_acvf_cpp(gamma, as.integer(p))
+  list(phi = as.numeric(res$phi), sigma2 = as.numeric(res$sigma2))
+}
+</file>
+
+<file path="R/multiscale.R">
+# Multi-scale spatial pooling helpers -----------------------------------------
+
+.ms_parent_maps <- function(parcels_fine, parcels_medium, parcels_coarse) {
+  pf <- as.integer(parcels_fine)
+  pm <- as.integer(parcels_medium)
+  pc <- as.integer(parcels_coarse)
+  stopifnot(length(pf) == length(pm), length(pf) == length(pc))
+
+  fine_ids <- sort(unique(pf))
+  parent_medium <- integer(max(fine_ids))
+  parent_coarse <- integer(max(fine_ids))
+
+  for (fid in fine_ids) {
+    idx <- which(pf == fid)
+    mids <- pm[idx]
+    cids <- pc[idx]
+    mid <- as.integer(names(which.max(table(mids))))
+    cid <- as.integer(names(which.max(table(cids))))
+    parent_medium[fid] <- mid
+    parent_coarse[fid] <- cid
+  }
+
+  list(parent_medium = parent_medium, parent_coarse = parent_coarse)
+}
+
+.ms_dispersion <- function(resid, parcels) {
+  parcels <- as.integer(parcels)
+  vvar <- apply(resid, 2L, stats::var)
+  tapply(vvar, parcels, function(z) stats::mad(z, constant = 1))
+}
+
+.ms_weights <- function(n_t, n_runs, sizes, disp, beta = 0.5, eps = 1e-8) {
+  s <- (n_t * n_runs) * (sizes ^ beta)
+  h <- 1 / (1 + pmax(disp, 0))
+  w <- s * h
+  w[w < eps] <- eps
+  w
+}
+
+.ms_pad <- function(x, len) {
+  if (length(x) >= len) return(x[seq_len(len)])
+  c(x, rep(0, len - length(x)))
+}
+
+.segment_acvf <- function(y, run_starts0, lag_max, unbiased = FALSE, center = TRUE) {
+  segmented_acvf_fast(y, run_starts0, max_lag = lag_max, unbiased = unbiased, center = center)
+}
+
+.ms_combine_to_fine <- function(phi_by_coarse, phi_by_medium, phi_by_fine,
+                                acvf_by_coarse = NULL, acvf_by_medium = NULL, acvf_by_fine = NULL,
+                                parents, sizes, disp_list, p_target,
+                                mode = c("pacf_weighted", "acvf_pooled"),
+                                kappa_clip = 0.99) {
+  mode <- match.arg(mode)
+  pids_fine <- sort(as.integer(names(phi_by_fine)))
+  out_phi <- setNames(vector("list", length(pids_fine)), as.character(pids_fine))
+
+  for (fid in pids_fine) {
+    mid <- parents$parent_medium[fid]
+    cid <- parents$parent_coarse[fid]
+    key_f <- as.character(fid)
+    key_m <- as.character(mid)
+    key_c <- as.character(cid)
+
+    size_vec <- c(
+      coarse = as.numeric(sizes$coarse[[key_c]]),
+      medium = as.numeric(sizes$medium[[key_m]]),
+      fine   = as.numeric(sizes$fine[[key_f]])
+    )
+    disp_vec <- c(
+      coarse = as.numeric(disp_list$coarse[[key_c]]),
+      medium = as.numeric(disp_list$medium[[key_m]]),
+      fine   = as.numeric(disp_list$fine[[key_f]])
+    )
+    w <- .ms_weights(sizes$n_t, sizes$n_runs, size_vec, disp_vec, beta = sizes$beta)
+    w <- w / sum(w)
+
+    if (mode == "pacf_weighted") {
+      kap_c <- ar_to_pacf(phi_by_coarse[[key_c]])
+      kap_m <- ar_to_pacf(phi_by_medium[[key_m]])
+      kap_f <- ar_to_pacf(phi_by_fine[[key_f]])
+
+      kap_c <- .ms_pad(kap_c, p_target)
+      kap_m <- .ms_pad(kap_m, p_target)
+      kap_f <- .ms_pad(kap_f, p_target)
+
+      kap <- w["coarse"] * kap_c + w["medium"] * kap_m + w["fine"] * kap_f
+      kap <- pmin(pmax(kap, -kappa_clip), kappa_clip)
+      out_phi[[key_f]] <- pacf_to_ar(kap)
+    } else {
+      g_c <- acvf_by_coarse[[key_c]]
+      g_m <- acvf_by_medium[[key_m]]
+      g_f <- acvf_by_fine[[key_f]]
+
+      g_c <- .ms_pad(g_c, p_target + 1L)
+      g_m <- .ms_pad(g_m, p_target + 1L)
+      g_f <- .ms_pad(g_f, p_target + 1L)
+
+      g <- w["coarse"] * g_c + w["medium"] * g_m + w["fine"] * g_f
+      yw <- yw_from_acvf_fast(g, p_target)
+      out_phi[[key_f]] <- enforce_stationary_ar(yw$phi)
+    }
+  }
+
+  out_phi
+}
+
+.parcel_means <- function(resid, parcels, na.rm = FALSE) {
+  parcel_means_fast(resid, parcels, na.rm = na.rm)
+}
+
+.ms_estimate_scale <- function(M, estimator, run_starts0 = NULL) {
+  ids <- colnames(M)
+  phi_by <- setNames(vector("list", length(ids)), ids)
+  acvf_by <- setNames(vector("list", length(ids)), ids)
+  for (id in ids) {
+    fit <- estimator(M[, id])
+    phi_by[[id]] <- fit$phi
+    lag_max <- max(0L, fit$order[["p"]] + 1L)
+    acvf_by[[id]] <- .segment_acvf(M[, id], run_starts0, lag_max)
+  }
+  list(phi = phi_by, acvf = acvf_by)
+}
+</file>
+
+<file path="R/pacf_helpers.R">
+#' @keywords internal
+pacf_to_ar <- function(kappa) {
+  p <- length(kappa)
+  if (p == 0L) return(numeric(0))
+  Phi <- vector("list", p)
+  Phi[[1L]] <- kappa[1L]
+  if (p >= 2L) {
+    for (m in 2L:p) {
+      km <- kappa[m]
+      prev <- Phi[[m-1L]]
+      pm1 <- m - 1L
+      cur <- numeric(m)
+      for (j in 1L:pm1) cur[j] <- prev[j] - km * prev[pm1 - j + 1L]
+      cur[m] <- km
+      Phi[[m]] <- cur
+    }
+  }
+  as.numeric(Phi[[p]])
+}
+
+#' @keywords internal
+ar_to_pacf <- function(phi, eps = 1e-12) {
+  p <- length(phi)
+  if (p == 0L) return(numeric(0))
+  a <- as.numeric(phi)
+  kappa <- numeric(p)
+  for (m in p:1L) {
+    km <- a[m]
+    kappa[m] <- km
+    if (m == 1L) break
+    den <- 1 - km * km
+    if (den < eps) den <- eps
+    anew <- numeric(m - 1L)
+    for (j in 1L:(m-1L)) anew[j] <- (a[j] + km * a[m - j]) / den
+    a <- anew
+  }
+  kappa
+}
+
+#' @keywords internal
+enforce_stationary_ar <- function(phi, bound = 0.99) {
+  if (length(phi) == 0L) return(phi)
+  kap <- ar_to_pacf(phi)
+  kap <- pmin(pmax(kap, -bound), bound)
+  pacf_to_ar(kap)
+}
+</file>
+
+<file path="R/RcppExports.R">
+# Generated by using Rcpp::compileAttributes() -> do not edit by hand
+# Generator token: 10BE3573-1514-4C36-9D1C-5A225CD40393
+
+hr_arma_fit_cpp <- function(y_in, p, q, p_big = 0L, iter = 0L) {
+    .Call(`_fmriAR_hr_arma_fit_cpp`, y_in, p, q, p_big, iter)
+}
+
+parcel_means_cpp <- function(resid, parcels, K = -1L, na_rm = FALSE) {
+    .Call(`_fmriAR_parcel_means_cpp`, resid, parcels, K, na_rm)
+}
+
+segmented_acvf_cpp <- function(y, run_starts, max_lag, unbiased = FALSE, center = TRUE) {
+    .Call(`_fmriAR_segmented_acvf_cpp`, y, run_starts, max_lag, unbiased, center)
+}
+
+yw_from_acvf_cpp <- function(gamma, p) {
+    .Call(`_fmriAR_yw_from_acvf_cpp`, gamma, p)
+}
+
+arma_whiten_inplace <- function(Y, X, phi, theta, run_starts, exact_first_ar1 = FALSE, parallel = TRUE) {
+    .Call(`_fmriAR_arma_whiten_inplace`, Y, X, phi, theta, run_starts, exact_first_ar1, parallel)
+}
+
+arma_whiten_void <- function(Y, X, phi, theta, run_starts, exact_first_ar1 = FALSE, parallel = TRUE) {
+    invisible(.Call(`_fmriAR_arma_whiten_void`, Y, X, phi, theta, run_starts, exact_first_ar1, parallel))
+}
+</file>
+
+<file path="R/sandwich.R">
+#' GLS standard errors from whitened residuals
+#'
+#' @param Xw Whitened design matrix.
+#' @param Yw Whitened data matrix (time x voxels).
+#' @param beta Optional coefficients (p x v); estimated if `NULL`.
+#' @param type Either "iid" (default) or "hc0" for a robust sandwich.
+#' @param df_mode Degrees-of-freedom mode: "rankX" (default) or "n-p".
+#' @param runs Optional run labels (reserved for future per-run scaling).
+#' @return List containing standard errors, innovation variances, and XtX inverse.
+#' @examples
+#' # Generate example whitened data
+#' n_time <- 200
+#' n_pred <- 3
+#' n_voxels <- 50
+#' Xw <- matrix(rnorm(n_time * n_pred), n_time, n_pred)
+#' Yw <- matrix(rnorm(n_time * n_voxels), n_time, n_voxels)
+#'
+#' # Compute standard errors
+#' se_result <- sandwich_from_whitened_resid(Xw, Yw, type = "iid")
+#'
+#' # Extract standard errors for first voxel
+#' se_voxel1 <- se_result$se[, 1]
+#' @export
+sandwich_from_whitened_resid <- function(Xw, Yw, beta = NULL,
+                                         type = c("iid", "hc0"),
+                                         df_mode = c("rankX", "n-p"),
+                                         runs = NULL) {
+  stopifnot(is.matrix(Xw), is.matrix(Yw), nrow(Xw) == nrow(Yw))
+  type <- match.arg(type)
+  df_mode <- match.arg(df_mode)
+
+  n <- nrow(Xw)
+  p <- ncol(Xw)
+  v <- ncol(Yw)
+
+  XtX <- crossprod(Xw)
+  Rchol <- chol(XtX)
+  XtX_inv <- chol2inv(Rchol)
+
+  if (is.null(beta)) beta <- XtX_inv %*% crossprod(Xw, Yw)
+
+  E <- Yw - Xw %*% beta
+  rankX <- qr(Xw)$rank
+  df <- if (df_mode == "rankX") n - rankX else n - p
+
+  if (type == "iid") {
+    sigma2 <- colSums(E^2) / df
+    se <- sqrt(outer(diag(XtX_inv), sigma2))
+    return(list(se = se, sigma2 = sigma2, XtX_inv = XtX_inv, df = df, type = "iid"))
+  }
+
+  se <- matrix(NA_real_, p, v)
+  for (j in 1L:v) {
+    e <- E[, j]
+    Xe <- Xw * as.numeric(e)
+    meat <- crossprod(Xe, Xe)
+    V <- XtX_inv %*% meat %*% XtX_inv
+    se[, j] <- sqrt(diag(V))
+  }
+  list(se = se, sigma2 = colSums(E^2) / df, XtX_inv = XtX_inv, df = df, type = "hc0")
+}
+</file>
+
+<file path="R/zzz.R">
+.onLoad <- function(libname, pkgname) {
+  op <- options()
+  op.fmriAR <- list(
+    fmriAR.max_threads = NA_integer_,
+    fmriAR.debug = FALSE,
+    fmriAR.use_cpp_hr = TRUE
+  )
+  toset <- !(names(op.fmriAR) %in% names(op))
+  if (any(toset)) options(op.fmriAR[toset])
+  invisible()
+}
+</file>
+
+<file path="tests/testthat/helper-fmriAR.R">
+# Helper utilities for fmriAR tests
+
+simulate_arma11 <- function(n, phi = 0.6, theta = 0.4, sigma = 1.0, burnin = 200, seed = NULL) {
+  if (!is.null(seed)) set.seed(seed)
+  e <- rnorm(n + burnin, 0, sigma)
+  y <- numeric(n + burnin)
+  for (t in seq_len(n + burnin)) {
+    y[t] <- (if (t > 1) phi * y[t - 1] else 0) + e[t] + (if (t > 1) theta * e[t - 1] else 0)
+  }
+  list(y = y[(burnin + 1):(burnin + n)], e = e[(burnin + 1):(burnin + n)])
+}
+
+simulate_ar1_runs <- function(S, L, phi = 0.8, sigma = 1.0, seed = 1L) {
+  set.seed(seed)
+  n <- S * L
+  y <- numeric(n)
+  starts <- seq.int(1L, n, by = L)
+  idx <- 1L
+  for (s in seq_len(S)) {
+    # Stationary initial state for an AR(1):
+    y_prev <- rnorm(1L, mean = 0, sd = sigma / sqrt(1 - phi^2))
+    for (t in seq_len(L)) {
+      e_t <- rnorm(1L, 0, sigma)
+      y[idx] <- phi * y_prev + e_t
+      y_prev <- y[idx]
+      idx <- idx + 1L
+    }
+  }
+  list(y = y, run_starts0 = as.integer(starts - 1L))
+}
+
+# Roots (moduli) for AR and MA polynomials used by fmriAR:
+# AR: A(z) = 1 - sum_k phi_k z^k
+# MA: M(z) = 1 + sum_j theta_j z^j
+ar_root_moduli <- function(phi) {
+  if (length(phi) == 0L) return(numeric())
+  Mod(polyroot(c(1, -as.numeric(phi))))
+}
+ma_root_moduli <- function(theta) {
+  if (length(theta) == 0L) return(numeric())
+  Mod(polyroot(c(1, as.numeric(theta))))
+}
+
+do_whiten_Y <- function(y, phi, theta = numeric(), run_starts0 = 0L, exact_first_ar1 = FALSE, parallel = TRUE, X_cols = 2L) {
+  stopifnot(is.numeric(y), is.numeric(phi), is.numeric(theta))
+  Y <- matrix(y, ncol = 1L)
+  X <- matrix(rnorm(length(y) * X_cols), ncol = X_cols)
+  # Call the Rcpp whitening (exported by the package)
+  out <- fmriAR:::arma_whiten_inplace(Y, X, phi = phi, theta = theta, run_starts = as.integer(run_starts0),
+                                      exact_first_ar1 = exact_first_ar1, parallel = parallel)
+  as.numeric(out$Y[, 1L])
+}
+</file>
+
+<file path="tests/testthat/helper-ms-diagnostics.R">
+# helper-ms-diagnostics.R
+# Utilities for multiscale diagnostics tests
+
+# Ensure fmriAR is available
+skip_if_no_fmriAR <- function() {
+  if (!requireNamespace("fmriAR", quietly = TRUE)) {
+    testthat::skip("fmriAR not installed")
+  }
+  ns <- asNamespace("fmriAR")
+  needed <- c("fit_noise", "whiten_apply")
+  missing <- !vapply(needed, function(fn) exists(fn, envir = ns, inherits = FALSE), logical(1))
+  if (any(missing)) {
+    testthat::skip(paste("Missing functions in fmriAR:", paste(needed[missing], collapse = ", ")))
+  }
+}
+
+# Enforce AR stationarity (reflect roots outside the unit circle)
+enforce_ar_stationary <- function(phi) {
+  p <- length(phi)
+  if (p == 0L) return(phi)
+  r <- polyroot(c(1, -phi))
+  changed <- FALSE
+  for (i in seq_along(r)) {
+    if (Mod(r[i]) <= 1) {
+      r[i] <- (1/conj(r[i])) * 1.05
+      changed <- TRUE
+    }
+  }
+  if (changed) {
+    cf <- poly(r) # leading 1
+    phi <- -Re(cf[-1L])
+  }
+  as.numeric(phi)
+}
+
+# Build a tidy multiscale hierarchy (coarse -> medium -> fine), and voxel labels
+make_hierarchy <- function(n_coarse = 4L, medium_per_coarse = 3L, fine_per_medium = 3L, vox_per_fine = 4L) {
+  n_medium <- n_coarse * medium_per_coarse
+  n_fine   <- n_medium * fine_per_medium
+  # parent maps (1-based)
+  parent_medium <- rep(seq_len(n_medium), each = fine_per_medium)
+  parent_coarse <- rep(rep(seq_len(n_coarse), each = medium_per_coarse), each = fine_per_medium)
+  # voxels per fine
+  v <- n_fine * vox_per_fine
+  parcels_fine <- rep(seq_len(n_fine), each = vox_per_fine)
+  list(
+    n_coarse = n_coarse,
+    n_medium = n_medium,
+    n_fine   = n_fine,
+    parent_medium = parent_medium,
+    parent_coarse = parent_coarse,
+    parcels_fine = parcels_fine,
+    vox_per_fine = vox_per_fine
+  )
+}
+
+# Simulate hierarchical AR(2) noise with small parcel-level deviations around parents
+# Returns Train/Test Y matrices and design matrices (X), plus run_starts (0-based)
+simulate_hier_ar2 <- function(h, n_train_per_run = 150L, n_test = 150L, runs_train = 2L, seed = 1L) {
+  set.seed(seed)
+  # True AR(2) at coarse level, safe/stable
+  phi_coarse <- replicate(h$n_coarse, enforce_ar_stationary(c(0.55, -0.18)))
+  # Medium inherit + small jitter
+  phi_medium <- matrix(NA_real_, 2L, h$n_medium)
+  for (m in seq_len(h$n_medium)) {
+    cix <- ceiling(m / (h$n_medium / h$n_coarse)) # parent coarse index
+    base <- phi_coarse[, cix]
+    phi_medium[, m] <- enforce_ar_stationary(base + rnorm(2L, 0, 0.04))
+  }
+  # Fine inherit + a bit more jitter
+  phi_fine <- matrix(NA_real_, 2L, h$n_fine)
+  for (f in seq_len(h$n_fine)) {
+    mix <- h$parent_medium[f]
+    base <- phi_medium[, mix]
+    phi_fine[, f] <- enforce_ar_stationary(base + rnorm(2L, 0, 0.05))
+  }
+
+  # Simulate runs for TRAIN (runs_train) and one TEST run
+  v <- length(h$parcels_fine)
+  # Map fine parcel -> voxel phi
+  phi_vox <- phi_fine[, h$parcels_fine]
+
+  sim_run <- function(n) {
+    Y <- matrix(0.0, n, v)
+    for (j in seq_len(v)) {
+      phi <- phi_vox[, j]
+      e <- rnorm(n + 5L) # small burn-in margin
+      y <- numeric(n + 5L)
+      for (t in seq_len(n + 5L)) {
+        y[t] <- (if (t > 1) phi[1] * y[t - 1] else 0) + (if (t > 2) phi[2] * y[t - 2] else 0) + e[t]
+      }
+      Y[, j] <- y[(5L + 1):(5L + n)]
+    }
+    Y
+  }
+
+  # Train concatenated over runs
+  Y_train <- do.call(rbind, replicate(runs_train, sim_run(n_train_per_run), simplify = FALSE))
+  Y_test  <- sim_run(n_test)
+
+  # Simple design (intercept) to satisfy interfaces
+  X_train <- matrix(1.0, nrow(Y_train), 1L)
+  X_test  <- matrix(1.0, nrow(Y_test), 1L)
+
+  # 0-based run_starts vectors
+  rs_train0 <- as.integer(seq.int(1L, nrow(Y_train), by = n_train_per_run) - 1L)
+  rs_test0  <- as.integer(0L)
+
+  list(
+    Y_train = Y_train, X_train = X_train, run_starts_train0 = rs_train0,
+    Y_test = Y_test,   X_test  = X_test,  run_starts_test0  = rs_test0,
+    parcels_fine = h$parcels_fine
+  )
+}
+
+# Ljung-Box p-values and KS distance to Uniform(0,1)
+lb_pvals <- function(E, lag = 10L) {
+  apply(E, 2L, function(e) stats::Box.test(e, lag = lag, type = "Ljung-Box")$p.value)
+}
+ks_to_uniform <- function(p) {
+  p <- sort(p[is.finite(p) & p >= 0 & p <= 1])
+  if (!length(p)) return(NA_real_)
+  n <- length(p)
+  max(abs(p - (seq_len(n)/n)))
+}
+
+# Negative log-likelihood per series under Gaussian with estimated sigma^2
+series_nll <- function(E) {
+  # MLE sigma^2 per series
+  s2 <- colMeans(E^2)
+  n <- nrow(E)
+  0.5 * n * (log(2 * pi) + log(s2) + 1)
+}
+
+# Extract phi_by_parcel (p x K_fine) from a plan (robust to internal changes)
+plan_phi_by_parcel <- function(plan) {
+  # Try compat$plan_info
+  pi <- try(fmriAR:::compat$plan_info(plan), silent = TRUE)
+  if (!inherits(pi, "try-error") && !is.null(pi$phi_by_parcel)) return(pi$phi_by_parcel)
+  # Try plan_info
+  pi2 <- try(fmriAR:::plan_info(plan), silent = TRUE)
+  if (!inherits(pi2, "try-error") && !is.null(pi2$phi_by_parcel)) return(pi2$phi_by_parcel)
+  # Try direct field
+  if (is.list(plan) && !is.null(plan$phi_by_parcel)) return(plan$phi_by_parcel)
+  stop("Cannot extract phi_by_parcel from plan")
+}
+</file>
+
+<file path="tests/testthat/test-api-coverage.R">
+test_that("fit_noise with Y/X matches precomputed residuals", {
+  set.seed(42)
+  n <- 160
+  runs <- rep(1:2, each = n / 2)
+  X <- cbind(1, rnorm(n))
+  beta <- c(0.5, -0.2)
+  eps <- as.numeric(stats::arima.sim(list(ar = 0.4), n = n))
+  Y <- matrix(X %*% beta + eps, ncol = 1L)
+  resid <- Y - X %*% qr.solve(X, Y)
+
+  plan_resid <- fit_noise(resid = resid, runs = runs, method = "ar", p = "auto", p_max = 4)
+  plan_yx    <- fit_noise(Y = Y, X = X, runs = runs, method = "ar", p = "auto", p_max = 4)
+
+  expect_equal(plan_resid$order, plan_yx$order)
+  expect_equal(plan_resid$phi, plan_yx$phi)
+  expect_equal(plan_resid$theta, plan_yx$theta)
+})
+
+test_that("fit_noise ignores ms_mode when multiscale = FALSE", {
+  set.seed(9)
+  n <- 120
+  v <- 20
+  X <- cbind(1, rnorm(n))
+  Y <- matrix(rnorm(n * v), n, v)
+  resid <- Y - X %*% qr.solve(X, Y)
+  parcels <- rep(1:5, length.out = v)
+
+  plan_plain <- fit_noise(resid, pooling = "parcel", parcels = parcels,
+                          method = "ar", p = 2L)
+  plan_off   <- fit_noise(resid, pooling = "parcel", parcels = parcels,
+                          method = "ar", p = 2L,
+                          multiscale = FALSE, ms_mode = "acvf_pooled")
+
+  out_plain <- whiten_apply(plan_plain, X, Y, parcels = parcels, parallel = FALSE)
+  out_off   <- whiten_apply(plan_off, X, Y, parcels = parcels, parallel = FALSE)
+
+  expect_equal(out_plain$Y, out_off$Y)
+})
+
+test_that("whiten_apply honors run_starts input", {
+  set.seed(7)
+  n1 <- 60
+  n2 <- 80
+  phi1 <- 0.5
+  phi2 <- -0.2
+  y1 <- as.numeric(stats::filter(rnorm(n1), filter = phi1, method = "recursive"))
+  y2 <- as.numeric(stats::filter(rnorm(n2), filter = phi2, method = "recursive"))
+  Y <- rbind(matrix(y1, ncol = 1L), matrix(y2, ncol = 1L))
+  X <- matrix(1, nrow(Y), 1L)
+
+  plan <- fmriAR:::new_whiten_plan(
+    phi = list(phi1, phi2),
+    theta = list(numeric(0), numeric(0)),
+    order = c(p = 1L, q = 0L),
+    runs = NULL,
+    exact_first = FALSE,
+    method = "ar",
+    pooling = "run"
+  )
+
+  out_runs <- whiten_apply(plan, X, Y, runs = c(rep(1L, n1), rep(2L, n2)), parallel = FALSE)
+  out_starts <- whiten_apply(plan, X, Y, run_starts = c(0L, n1), parallel = FALSE)
+
+  expect_equal(out_runs$Y, out_starts$Y)
+  expect_equal(out_runs$X, out_starts$X)
+})
+
+test_that("whiten_apply inplace modifies matrices", {
+  set.seed(12)
+  n <- 90
+  phi <- 0.4
+  y <- as.numeric(stats::filter(rnorm(n), filter = phi, method = "recursive"))
+  Y <- matrix(y, ncol = 1L)
+  X <- matrix(1, n, 1L)
+  plan <- fmriAR:::new_whiten_plan(
+    phi = list(phi),
+    theta = list(numeric(0)),
+    order = c(p = 1L, q = 0L),
+    runs = NULL,
+    exact_first = FALSE,
+    method = "ar",
+    pooling = "global"
+  )
+  Y_ref <- Y
+  X_ref <- X
+  res_inplace <- whiten_apply(plan, X, Y, inplace = TRUE, parallel = FALSE)
+  res_regular <- whiten_apply(plan, X_ref, Y_ref, parallel = FALSE)
+
+  expect_equal(res_inplace$Y, res_regular$Y)
+  expect_equal(res_inplace$X, res_regular$X)
+})
+
+test_that("global pooling averages run-level coefficients", {
+  set.seed(23)
+  n1 <- 400
+  n2 <- 600
+  phi1 <- 0.3
+  phi2 <- 0.7
+  y1 <- as.numeric(stats::filter(rnorm(n1), filter = phi1, method = "recursive"))
+  y2 <- as.numeric(stats::filter(rnorm(n2), filter = phi2, method = "recursive"))
+  resid <- rbind(cbind(y1, y1), cbind(y2, y2))
+  runs <- c(rep(1L, n1), rep(2L, n2))
+
+  plan <- fit_noise(resid = resid, runs = runs, pooling = "global",
+                    method = "ar", p = 1L)
+  if (plan$order[["p"]] == 0L) testthat::skip("Estimated AR order was zero")
+  phi_hat <- plan$phi[[1]][1]
+  expected <- (n1 * phi1 + n2 * phi2) / (n1 + n2)
+  expect_equal(phi_hat, expected, tolerance = 0.05)
+})
+
+test_that("multiscale acvf_pooled combines parcel scales", {
+  set.seed(19)
+  n <- 300
+  v <- 96
+  parcels_coarse <- rep(1:4, each = v / 4)
+  parcels_medium <- rep(1:8, each = v / 8)
+  parcels_fine <- rep(1:16, each = v / 16)
+
+  phi_coarse <- runif(4, 0.3, 0.7)
+  phi_vox <- phi_coarse[parcels_coarse] + rnorm(v, 0, 0.04)
+
+  noise <- matrix(rnorm(n * v), n, v)
+  Y <- noise
+  for (j in seq_len(v)) {
+    for (t in 2:n) {
+      Y[t, j] <- phi_vox[j] * Y[t - 1, j] + noise[t, j]
+    }
+  }
+  X <- cbind(1, rnorm(n))
+  resid <- Y - X %*% qr.solve(X, Y)
+
+  plan_fine <- fit_noise(resid, pooling = "parcel", parcels = parcels_fine,
+                         method = "ar", p = "auto", p_max = 4)
+  plan_ms <- fit_noise(resid, pooling = "parcel", parcels = parcels_fine,
+                       parcel_sets = list(coarse = parcels_coarse,
+                                          medium = parcels_medium,
+                                          fine = parcels_fine),
+                       method = "ar", p = "auto", p_max = 4,
+                       multiscale = TRUE, ms_mode = "acvf_pooled")
+
+  expect_equal(plan_ms$order[["p"]], plan_fine$order[["p"]])
+  expect_true(any(abs(unlist(plan_ms$phi_by_parcel) - unlist(plan_fine$phi_by_parcel)) > 1e-6))
+
+  out_ms <- whiten_apply(plan_ms, X, Y, parcels = parcels_fine, parallel = FALSE)
+  expect_equal(dim(out_ms$Y), dim(Y))
+})
+
+test_that("parcel means handles NA removal", {
+  set.seed(33)
+  resid <- matrix(rnorm(30), nrow = 5)
+  resid[2, 3] <- NA_real_
+  parcels <- c(1, 1, 2, 2, 3, 3)
+
+  fast <- fmriAR:::`.parcel_means`(resid, parcels, na.rm = TRUE)
+  manual <- matrix(0, nrow = 5, ncol = 3)
+  manual[, 1] <- rowMeans(resid[, 1:2], na.rm = TRUE)
+  manual[, 2] <- rowMeans(resid[, 3:4], na.rm = TRUE)
+  manual[, 3] <- rowMeans(resid[, 5:6], na.rm = TRUE)
+  colnames(manual) <- colnames(fast)
+
+  expect_equal(fast, manual)
+})
+
+test_that("segmented_acvf supports unbiased and no-centering", {
+  y <- c(1, 3, 5, 7)
+  rs0 <- 0L
+  g_biased <- fmriAR:::`.segment_acvf`(y, rs0, lag_max = 2L, unbiased = FALSE, center = FALSE)
+  g_unbiased <- fmriAR:::`.segment_acvf`(y, rs0, lag_max = 2L, unbiased = TRUE, center = FALSE)
+
+  expect_equal(g_biased[1], mean(y^2))
+  expect_equal(g_unbiased[2], sum(y[-1] * y[-length(y)]) / (length(y) - 1))
+})
+
+test_that("whiten() matches fit_noise + whiten_apply", {
+  set.seed(27)
+  n <- 180
+  runs <- rep(1:3, each = 60)
+  X <- cbind(1, rnorm(n))
+  beta <- c(0.2, 0.5)
+  eps <- as.numeric(stats::arima.sim(list(ar = 0.3), n = n))
+  Y <- matrix(X %*% beta + eps, ncol = 1L)
+
+  plan <- fit_noise(resid = Y - X %*% qr.solve(X, Y), runs = runs,
+                    method = "ar", p = "auto", p_max = 4)
+  manual <- whiten_apply(plan, X, Y, runs = runs, parallel = FALSE)
+  shortcut <- whiten(X, Y, runs = runs, method = "ar", p = "auto", p_max = 4)
+
+  expect_equal(manual$X, shortcut$X)
+  expect_equal(manual$Y, shortcut$Y)
+})
+
+test_that("compat plan_info exposes parcel coefficients", {
+  set.seed(101)
+  n <- 160
+  v <- 40
+  parcels <- rep(1:8, each = v / 8)
+  X <- cbind(1, rnorm(n))
+  Y <- matrix(rnorm(n * v), n, v)
+  resid <- Y - X %*% qr.solve(X, Y)
+
+  plan <- fit_noise(resid, pooling = "parcel", parcels = parcels,
+                    method = "ar", p = 2L, p_max = 4)
+  info <- fmriAR:::compat$plan_info(plan)
+
+  expect_true(!is.null(info$phi_by_parcel))
+  expect_equal(dim(info$phi_by_parcel), c(plan$order[["p"]], length(unique(parcels))))
+})
+
+test_that("compat plan_info omits parcel coefficients for global plans", {
+  set.seed(55)
+  resid <- matrix(rnorm(200), nrow = 100, ncol = 2)
+  plan <- fit_noise(resid, method = "ar", p = 1L, pooling = "global")
+  info <- fmriAR:::compat$plan_info(plan)
+  expect_true(is.null(info$phi_by_parcel))
+})
+</file>
+
+<file path="tests/testthat/test-arima-comparison.R">
+test_that("HR ARMA(1,1) aligns with stats::arima estimates", {
+  skip_if_not_installed("fmriAR")
+  set.seed(202401)
+  sim <- simulate_arma11(n = 4000, phi = 0.6, theta = 0.4, sigma = 1.0, burnin = 500)
+  y <- sim$y
+
+  hr_fit <- fmriAR:::hr_arma(y, p = 1L, q = 1L, iter = 2L, step1 = "yw", enforce = TRUE)
+  arima_fit <- stats::arima(y, order = c(1L, 0L, 1L), include.mean = FALSE, method = "ML")
+
+  expect_equal(as.numeric(hr_fit$phi), unname(arima_fit$coef["ar1"]), tolerance = 0.05)
+  expect_equal(as.numeric(hr_fit$theta), unname(arima_fit$coef["ma1"]), tolerance = 0.05)
+})
+
+test_that("Pure AR fits agree with stats::arima", {
+  skip_if_not_installed("fmriAR")
+  set.seed(202402)
+  phi_true <- c(0.55, -0.25)
+  y <- as.numeric(stats::arima.sim(list(ar = phi_true), n = 5000, sd = 1))
+
+  hr_fit <- fmriAR:::hr_arma(y, p = 2L, q = 0L, iter = 1L, step1 = "yw", enforce = TRUE)
+  arima_fit <- stats::arima(y, order = c(2L, 0L, 0L), include.mean = FALSE, method = "ML")
+
+  expect_equal(as.numeric(hr_fit$phi), unname(arima_fit$coef[c("ar1", "ar2")]), tolerance = 0.04)
+  expect_length(hr_fit$theta, 0L)
+})
+</file>
+
+<file path="tests/testthat/test-arma11-cpp.R">
+test_that("hr_arma_fit_cpp recovers ARMA(1,1) structure", {
+  skip_if_not_installed("stats")
+  set.seed(123)
+  n <- 4000L
+  phi <- 0.6
+  theta <- 0.4
+  e <- rnorm(n)
+  y <- numeric(n)
+  y[1] <- e[1]
+  for (t in 2:n) {
+    y[t] <- phi * y[t - 1] + e[t] + theta * e[t - 1]
+  }
+
+  est <- fmriAR:::hr_arma_fit_cpp(y, p = 1L, q = 1L, p_big = 12L, iter = 1L)
+  phi_hat <- fmriAR:::enforce_stationary_ar(est$phi, bound = 0.99)
+  theta_hat <- fmriAR:::enforce_invertible_ma(est$theta)
+
+  expect_lt(abs(phi_hat[1] - phi), 0.10)
+  expect_lt(abs(theta_hat[1] - theta), 0.15)
+
+  Y <- cbind(y)
+  X <- cbind(1)
+  out <- arma_whiten_inplace(Y, X,
+                             phi = phi_hat,
+                             theta = theta_hat,
+                             run_starts = 0L,
+                             exact_first_ar1 = FALSE,
+                             parallel = FALSE)
+  innovations <- drop(out$Y)
+  ac_vals <- stats::acf(innovations, plot = FALSE, lag.max = 12, demean = TRUE)$acf[-1L]
+  ci <- 1.96 / sqrt(length(innovations))
+  expect_lt(mean(abs(ac_vals[1:5])), 2 * ci)
+})
+</file>
+
+<file path="tests/testthat/test-hr-arma-recovery.R">
+test_that("HR ARMA(1,1) recovers coefficients and whitening yields near-white residuals", {
+  skip_if_not_installed("fmriAR")
+  # Simulate ARMA(1,1)
+  gen <- simulate_arma11(n = 8000, phi = 0.6, theta = 0.4, sigma = 1.0, burnin = 300, seed = 123)
+  y <- gen$y
+  res <- fmriAR:::hr_arma_fit_cpp(y, p = 1L, q = 1L, p_big = 0L, iter = 2L)
+  expect_true(isTRUE(res$ok))
+  expect_equal(as.numeric(res$phi), 0.6, tolerance = 0.06)
+  expect_equal(as.numeric(res$theta), 0.4, tolerance = 0.07)
+  expect_equal(as.numeric(res$sigma2), 1.0, tolerance = 0.15)
+
+  # Whiten with estimated parameters; residuals should be close to white
+  yw <- do_whiten_Y(y, phi = res$phi, theta = res$theta, run_starts0 = 0L, exact_first_ar1 = FALSE, parallel = FALSE)
+  ac <- as.numeric(stats::acf(yw, plot = FALSE, lag.max = 5L)$acf)[-1L]
+  expect_lt(max(abs(ac)), 0.05)
+})
+</file>
+
+<file path="tests/testthat/test-ms-nll.R">
+test_that("Multiscale pooling reduces held-out predictive NLL of innovations", {
+  skip_if_no_fmriAR()
+
+  h <- make_hierarchy(n_coarse = 4L, medium_per_coarse = 3L, fine_per_medium = 3L, vox_per_fine = 4L)
+  sim <- simulate_hier_ar2(h, n_train_per_run = 160L, n_test = 160L, runs_train = 2L, seed = 456)
+  parcels <- sim$parcels_fine
+
+  plan_fine <- fmriAR::fit_noise(Y = sim$Y_train, X = sim$X_train, parcels = parcels,
+                                 pooling = "parcel", multiscale = FALSE, p_target = 2L)
+  plan_ms   <- fmriAR::fit_noise(Y = sim$Y_train, X = sim$X_train, parcels = parcels,
+                                 pooling = "parcel", multiscale = TRUE, ms_mode = "acvf_pooled", p_target = 2L)
+
+  w_fine <- fmriAR::whiten_apply(plan_fine, X = sim$X_test, Y = sim$Y_test, run_starts = sim$run_starts_test0)
+  w_ms   <- fmriAR::whiten_apply(plan_ms,   X = sim$X_test, Y = sim$Y_test, run_starts = sim$run_starts_test0)
+
+  nll_fine <- mean(series_nll(w_fine$Y))
+  nll_ms   <- mean(series_nll(w_ms$Y))
+
+  # Expect lower (better) average NLL under multiscale
+  expect_lt(nll_ms, nll_fine - 0.5)
+})
+</file>
+
+<file path="tests/testthat/test-ms-stability.R">
+test_that("Multiscale pooling stabilizes AR coefficients across train folds", {
+  skip_if_no_fmriAR()
+
+  h <- make_hierarchy(n_coarse = 4L, medium_per_coarse = 3L, fine_per_medium = 3L, vox_per_fine = 4L)
+  sim_all <- simulate_hier_ar2(h, n_train_per_run = 140L, n_test = 140L, runs_train = 3L, seed = 789)
+  parcels <- sim_all$parcels_fine
+
+  # Build 3 folds: leave-one-run-out across the 3 training runs
+  n_per_run <- 140L
+  total_train <- 3L * n_per_run
+  run_idx <- rep(1:3, each = n_per_run)
+
+  get_plan <- function(keep_runs, multiscale) {
+    idx <- run_idx %in% keep_runs
+    Y_tr <- sim_all$Y_train[idx, , drop = FALSE]
+    X_tr <- sim_all$X_train[idx, , drop = FALSE]
+    fmriAR::fit_noise(Y = Y_tr, X = X_tr, parcels = parcels,
+                      pooling = "parcel", multiscale = multiscale, ms_mode = "acvf_pooled", p_target = 2L)
+  }
+
+  # Collect phi_by_parcel across folds
+  phi_fine_list <- list()
+  phi_ms_list   <- list()
+  folds <- list(c(2,3), c(1,3), c(1,2))
+  for (f in seq_along(folds)) {
+    plan_f <- get_plan(folds[[f]], multiscale = FALSE)
+    plan_m <- get_plan(folds[[f]], multiscale = TRUE)
+    phi_fine_list[[f]] <- plan_phi_by_parcel(plan_f)
+    phi_ms_list[[f]]   <- plan_phi_by_parcel(plan_m)
+  }
+
+  # Stack and compute SD across folds per parcel and lag
+  phi_fine_arr <- abind::abind(phi_fine_list, along = 3L)  # p x K x F
+  phi_ms_arr   <- abind::abind(phi_ms_list,   along = 3L)
+
+  sd_fine <- apply(phi_fine_arr, c(1,2), stats::sd, na.rm = TRUE)
+  sd_ms   <- apply(phi_ms_arr,   c(1,2), stats::sd, na.rm = TRUE)
+
+  # Compare median SD across parcels and lags
+  med_fine <- median(sd_fine)
+  med_ms   <- median(sd_ms)
+
+  # Expect at least ~10% reduction in dispersion
+  expect_lte(med_ms, 0.9 * med_fine)
+})
+</file>
+
+<file path="tests/testthat/test-ms-whiteness-ks.R">
+test_that("Multiscale pooling improves whiteness (KS to Uniform) on held-out run", {
+  skip_if_no_fmriAR()
+
+  # Build hierarchy and simulate
+  h <- make_hierarchy(n_coarse = 4L, medium_per_coarse = 3L, fine_per_medium = 3L, vox_per_fine = 4L)
+  sim <- simulate_hier_ar2(h, n_train_per_run = 160L, n_test = 160L, runs_train = 2L, seed = 123)
+  parcels <- sim$parcels_fine
+
+  # Fit noise models on TRAIN
+  plan_fine <- fmriAR::fit_noise(Y = sim$Y_train, X = sim$X_train, parcels = parcels,
+                                 pooling = "parcel", multiscale = FALSE, p_target = 2L)
+  plan_ms   <- fmriAR::fit_noise(Y = sim$Y_train, X = sim$X_train, parcels = parcels,
+                                 pooling = "parcel", multiscale = TRUE, ms_mode = "acvf_pooled", p_target = 2L)
+
+  # Apply on TEST only
+  w_fine <- fmriAR::whiten_apply(plan_fine, X = sim$X_test, Y = sim$Y_test, run_starts = sim$run_starts_test0)
+  w_ms   <- fmriAR::whiten_apply(plan_ms,   X = sim$X_test, Y = sim$Y_test, run_starts = sim$run_starts_test0)
+
+  # Whitened innovations
+  E_fine <- w_fine$Y
+  E_ms   <- w_ms$Y
+
+  # p-values & KS
+  p_fine <- lb_pvals(E_fine, lag = 10L)
+  p_ms   <- lb_pvals(E_ms,   lag = 10L)
+  KS_fine <- ks_to_uniform(p_fine)
+  KS_ms   <- ks_to_uniform(p_ms)
+
+  # Fraction of small p-values
+  frac_fine <- mean(p_fine <= 0.05, na.rm = TRUE)
+  frac_ms   <- mean(p_ms   <= 0.05, na.rm = TRUE)
+
+  # Expect multiscale to be closer to Uniform (smaller KS) and lower rejection rate
+  expect_true(KS_fine - KS_ms >= 0.02 || frac_fine - frac_ms >= 0.10)
+})
+</file>
+
+<file path="tests/testthat/test-multiscale.R">
+test_that("parcel whitening returns expected structure", {
+  set.seed(3)
+  n <- 200
+  v <- 60
+  parcels <- rep(1:12, each = v / 12)
+  X <- cbind(1, rnorm(n))
+  Y <- matrix(rnorm(n * v), n, v)
+  res <- Y - X %*% qr.solve(X, Y)
+
+  plan <- fit_noise(res, runs = NULL, method = "ar", p = "auto", p_max = 4,
+                    pooling = "parcel", parcels = parcels)
+  out <- whiten_apply(plan, X, Y, parcels = parcels)
+
+  expect_null(out$X)
+  expect_true(is.list(out$X_by))
+  expect_equal(length(out$X_by), length(unique(parcels)))
+  for (pid in names(out$X_by)) {
+    expect_equal(dim(out$X_by[[pid]]), dim(X))
+  }
+  expect_equal(dim(out$Y), dim(Y))
+})
+
+test_that("multiscale pooling improves whiteness", {
+  set.seed(11)
+  n <- 400
+  v <- 120
+  parcels_coarse <- rep(1:6, each = v / 6)
+  parcels_medium <- rep(1:12, each = v / 12)
+  parcels_fine <- rep(1:24, each = v / 24)
+
+  phi_coarse <- runif(6, 0.3, 0.8)
+  phi_vox <- phi_coarse[parcels_coarse] + rnorm(v, 0, 0.03)
+
+  noise <- matrix(rnorm(n * v), n, v)
+  Y <- noise
+  for (j in seq_len(v)) {
+    for (t in 2:n) {
+      Y[t, j] <- phi_vox[j] * Y[t - 1, j] + noise[t, j]
+    }
+  }
+  X <- cbind(1, rnorm(n))
+  res <- Y - X %*% qr.solve(X, Y)
+
+  plan_f <- fit_noise(res, runs = NULL, method = "ar", p = "auto", p_max = 4,
+                      pooling = "parcel", parcels = parcels_fine)
+  out_f <- whiten_apply(plan_f, X, Y, parcels = parcels_fine)
+
+  plan_ms <- fit_noise(res, runs = NULL, method = "ar", p = "auto", p_max = 4,
+                       pooling = "parcel", parcels = parcels_fine,
+                       parcel_sets = list(coarse = parcels_coarse,
+                                          medium = parcels_medium,
+                                          fine = parcels_fine),
+                       multiscale = "pacf_weighted", beta = 0.5)
+  out_ms <- whiten_apply(plan_ms, X, Y, parcels = parcels_fine)
+
+  whiteness <- function(Yw) {
+    apply(Yw, 2, function(y) {
+      ac <- stats::acf(y, lag.max = 3, plot = FALSE, demean = TRUE)$acf[-1L]
+      mean(abs(ac))
+    }) |> mean()
+  }
+
+  m_f <- whiteness(out_f$Y)
+  m_ms <- whiteness(out_ms$Y)
+
+  expect_lte(m_ms, m_f)
+})
+
+test_that("parcel means helper matches brute-force computation", {
+  set.seed(51)
+  n <- 30
+  v <- 25
+  resid <- matrix(rnorm(n * v), nrow = n, ncol = v)
+  parcels <- sample(1:8, size = v, replace = TRUE)
+
+  fast <- fmriAR:::`.parcel_means`(resid, parcels)
+  ref <- sapply(sort(unique(parcels)), function(pid) {
+    idx <- which(parcels == pid)
+    rowMeans(resid[, idx, drop = FALSE])
+  })
+  colnames(ref) <- as.character(sort(unique(parcels)))
+
+  expect_equal(fast, ref, tolerance = 1e-12)
+})
+
+test_that("segment-aware ACVF pools within runs", {
+  set.seed(99)
+  n <- 150
+  runs <- rep(1:3, c(40, 60, 50))
+  y <- as.numeric(stats::arima.sim(list(ar = 0.6), n = n))
+  run_starts0 <- fmriAR:::`.full_run_starts`(runs, censor = NULL, n = n)
+  lag_max <- 4L
+  acvf_seg <- fmriAR:::`.segment_acvf`(y, run_starts0, lag_max)
+
+  segments <- split(y, runs)
+  manual <- numeric(lag_max + 1L)
+  total_n <- 0L
+  for (seg in segments) {
+    L <- length(seg)
+    mu <- mean(seg)
+    total_n <- total_n + L
+    for (lag in 0:lag_max) {
+      if (lag < L) {
+        seg1 <- seg[(lag + 1L):L] - mu
+        seg2 <- seg[1:(L - lag)] - mu
+        manual[lag + 1L] <- manual[lag + 1L] + sum(seg1 * seg2)
+      }
+    }
+  }
+  manual <- manual / total_n
+
+  expect_equal(acvf_seg, manual, tolerance = 1e-10)
+})
+</file>
+
+<file path="tests/testthat/test-parallel-determinism.R">
+test_that("Whitening is deterministic across thread counts and parallel flag", {
+  skip_if_not_installed("fmriAR")
+  set.seed(1)
+  n  <- 512L
+  v  <- 64L
+  Y  <- matrix(rnorm(n * v), nrow = n, ncol = v)
+  X  <- matrix(rnorm(n * 3L), nrow = n, ncol = 3L)
+  phi <- c(0.7, -0.2)   # stable AR(2)
+  theta <- 0.5          # MA(1)
+  rs <- 0L
+
+  # Serial
+  out1 <- fmriAR:::arma_whiten_inplace(Y, X, phi = phi, theta = theta, run_starts = rs,
+                                       exact_first_ar1 = FALSE, parallel = FALSE)
+
+  # Parallel (threads may be ignored on systems without OpenMP; results should still be identical)
+  old <- Sys.getenv("OMP_NUM_THREADS", unset = NA_character_)
+  on.exit(if (!is.na(old)) Sys.setenv(OMP_NUM_THREADS = old), add = TRUE)
+
+  Sys.setenv(OMP_NUM_THREADS = "1")
+  out2 <- fmriAR:::arma_whiten_inplace(Y, X, phi = phi, theta = theta, run_starts = rs,
+                                       exact_first_ar1 = FALSE, parallel = TRUE)
+  Sys.setenv(OMP_NUM_THREADS = "2")
+  out3 <- fmriAR:::arma_whiten_inplace(Y, X, phi = phi, theta = theta, run_starts = rs,
+                                       exact_first_ar1 = FALSE, parallel = TRUE)
+  Sys.setenv(OMP_NUM_THREADS = "8")
+  out4 <- fmriAR:::arma_whiten_inplace(Y, X, phi = phi, theta = theta, run_starts = rs,
+                                       exact_first_ar1 = FALSE, parallel = TRUE)
+
+  expect_equal(out1$Y, out2$Y, tolerance = 0)  # exact equality
+  expect_equal(out1$X, out2$X, tolerance = 0)
+  expect_equal(out1$Y, out3$Y, tolerance = 0)
+  expect_equal(out1$X, out3$X, tolerance = 0)
+  expect_equal(out1$Y, out4$Y, tolerance = 0)
+  expect_equal(out1$X, out4$X, tolerance = 0)
+})
+</file>
+
+<file path="tests/testthat/test-segment-edge-ar1.R">
+test_that("Segment starts with exact_first_ar1 yield correctly scaled first innovations", {
+  skip_if_not_installed("fmriAR")
+  S <- 100L
+  L <- 50L
+  phi <- 0.8
+  sigma <- 1.3
+
+  sim <- simulate_ar1_runs(S = S, L = L, phi = phi, sigma = sigma, seed = 99L)
+  y <- sim$y
+  rs0 <- sim$run_starts0
+
+  yw <- do_whiten_Y(y, phi = phi, theta = numeric(), run_starts0 = rs0,
+                    exact_first_ar1 = TRUE, parallel = FALSE)
+
+  first_idx <- as.integer(rs0 + 1L)
+  first_innov <- yw[first_idx]
+
+  # Theoretical variance at segment starts with exact_first_ar1 is sigma^2
+  v_emp <- var(first_innov)
+  expect_equal(v_emp, sigma^2, tolerance = 0.2)
+
+  # Also check interior innovations have roughly the same variance
+  interior <- setdiff(seq_along(yw), first_idx)
+  expect_equal(var(yw[interior]), sigma^2, tolerance = 0.2)
+})
+</file>
+
+<file path="tests/testthat/test-stability-enforcement.R">
+test_that("Estimated AR/MA polynomials are (likely) stationary/invertible", {
+  skip_if_not_installed("fmriAR")
+  # This test will pass after enforcement patch; before that it may fail for some seeds.
+  set.seed(42)
+  n <- 600
+  phi_true <- c(1.60, -0.64)  # stable AR(2), roots at 1.25 (double)
+  theta_true <- 0.5           # invertible MA(1)
+  # simulate ARMA(2,1) by building from innovations
+  e <- rnorm(n + 200L, 0, 1)
+  y <- numeric(n + 200L)
+  for (t in seq_len(n + 200L)) {
+    y[t] <- (if (t > 1) (phi_true[1] * y[t - 1] + phi_true[2] * (if (t > 2) y[t - 2] else 0)) else 0) +
+             e[t] + (if (t > 1) theta_true * e[t - 1] else 0)
+  }
+  y <- y[201:(200 + n)] - mean(y[201:(200 + n)])
+
+  fit <- fmriAR:::hr_arma_fit_cpp(y, p = 2L, q = 1L, p_big = 0L, iter = 1L)
+  expect_true(isTRUE(fit$ok))
+
+  # Check root moduli (should exceed 1 by a margin)
+  ar_mod <- ar_root_moduli(as.numeric(fit$phi))
+  ma_mod <- ma_root_moduli(as.numeric(fit$theta))
+
+  expect_gt(min(ar_mod), 1.0 + 1e-6)
+  expect_gt(min(ma_mod), 1.0 + 1e-6)
+})
+</file>
+
+<file path="tests/testthat/test-whitening.R">
+test_that("AR(1) whitening reduces lag-1 autocorrelation", {
+  set.seed(1)
+  n <- 600
+  phi <- 0.6
+  e <- rnorm(n)
+  y <- as.numeric(stats::filter(e, filter = phi, method = "recursive"))
+  Y <- cbind(y)
+  X <- cbind(1)
+
+  out <- arma_whiten_inplace(
+    Y = Y,
+    X = X,
+    phi = phi,
+    theta = numeric(0),
+    run_starts = 0L,
+    exact_first_ar1 = TRUE,
+    parallel = FALSE
+  )
+  yw <- drop(out$Y)
+  acf_vals <- stats::acf(yw, plot = FALSE, lag.max = 10, demean = TRUE)$acf[-1L]
+  expect_true(all(abs(acf_vals[1:3]) < 0.15))
+})
+
+test_that("PACF <-> AR round-trips", {
+  kap <- c(0.2, -0.1, 0.3)
+  phi <- fmriAR:::pacf_to_ar(kap)
+  kap2 <- fmriAR:::ar_to_pacf(phi)
+  expect_equal(unname(kap2), unname(kap), tolerance = 1e-8)
+})
+
+test_that("run-specific parameters are applied per segment", {
+  set.seed(11)
+  n1 <- 80
+  n2 <- 90
+  phi1 <- 0.5
+  phi2 <- -0.3
+  y1 <- as.numeric(stats::filter(rnorm(n1), filter = phi1, method = "recursive"))
+  y2 <- as.numeric(stats::filter(rnorm(n2), filter = phi2, method = "recursive"))
+  Y <- rbind(matrix(y1, ncol = 1L), matrix(y2, ncol = 1L))
+  X <- rbind(matrix(1, n1, 1L), matrix(1, n2, 1L))
+  runs <- c(rep(1L, n1), rep(2L, n2))
+
+  plan <- fmriAR:::new_whiten_plan(
+    phi = list(phi1, phi2),
+    theta = list(numeric(0), numeric(0)),
+    order = c(p = 1L, q = 0L),
+    runs = runs,
+    exact_first = FALSE,
+    method = "ar",
+    pooling = "run"
+  )
+
+  out <- whiten_apply(plan, X, Y, parallel = FALSE)
+
+  manual1 <- arma_whiten_inplace(matrix(y1, ncol = 1L), matrix(1, n1, 1L),
+                                 phi = phi1, theta = numeric(0),
+                                 run_starts = 0L, exact_first_ar1 = FALSE,
+                                 parallel = FALSE)
+  manual2 <- arma_whiten_inplace(matrix(y2, ncol = 1L), matrix(1, n2, 1L),
+                                 phi = phi2, theta = numeric(0),
+                                 run_starts = 0L, exact_first_ar1 = FALSE,
+                                 parallel = FALSE)
+
+  expect_equal(out$Y[seq_len(n1), , drop = FALSE], manual1$Y)
+  expect_equal(out$Y[n1 + seq_len(n2), , drop = FALSE], manual2$Y)
+})
+
+test_that("censor gaps reset the whitening recursions", {
+  set.seed(21)
+  n <- 150
+  phi <- 0.4
+  y <- as.numeric(stats::filter(rnorm(n), filter = phi, method = "recursive"))
+  Y <- matrix(y, ncol = 1L)
+  X <- matrix(1, n, 1L)
+  runs <- rep(1L, n)
+  censor <- c(60L, 120L)
+
+  plan <- fmriAR:::new_whiten_plan(
+    phi = list(phi),
+    theta = list(numeric(0)),
+    order = c(p = 1L, q = 0L),
+    runs = runs,
+    exact_first = FALSE,
+    method = "ar",
+    pooling = "global"
+  )
+
+  out_plan <- whiten_apply(plan, X, Y, runs = runs, censor = censor, parallel = FALSE)
+
+  run_starts <- as.integer(c(0L, censor))
+  out_manual <- arma_whiten_inplace(Y, X,
+                                    phi = phi, theta = numeric(0),
+                                    run_starts = run_starts,
+                                    exact_first_ar1 = FALSE,
+                                    parallel = FALSE)
+
+  expect_equal(out_plan$Y, out_manual$Y)
+  expect_equal(out_plan$X, out_manual$X)
+})
+
+test_that("ARMA(1,1) whitening yields near-white innovations", {
+  set.seed(31)
+  n <- 800
+  phi <- 0.3
+  theta <- -0.25
+  y <- as.numeric(stats::arima.sim(model = list(ar = phi, ma = theta), n = n))
+  Y <- matrix(y, ncol = 1L)
+  X <- matrix(1, n, 1L)
+
+  out <- arma_whiten_inplace(Y, X,
+                             phi = phi, theta = theta,
+                             run_starts = 0L,
+                             exact_first_ar1 = FALSE,
+                             parallel = FALSE)
+  innovations <- drop(out$Y)
+  acf_vals <- stats::acf(innovations, lag.max = 10, plot = FALSE, demean = TRUE)$acf[-1L]
+  expect_true(all(abs(acf_vals[1:5]) < 0.1))
+})
+</file>
+
+<file path="tests/testthat.R">
+library(testthat)
+library(fmriAR)
+
+test_check("fmriAR")
+</file>
+
+<file path="DESCRIPTION">
+Package: fmriAR
+Type: Package
+Title: Fast AR/ARMA Prewhitening for fMRI Design and Data
+Version: 0.0.0.9000
+Authors@R: person("Your", "Name", email = "you@example.com", role = c("aut","cre"))
+Description: Lightweight utilities to estimate AR/ARMA noise models from residuals and apply matched GLS prewhitening to fMRI design and data matrices. Run-aware and censor-aware; small exported surface; C++ core for speed.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2.9000
+Depends: R (>= 4.0)
+Imports: Rcpp, stats
+Suggests: testthat (>= 3.0.0), knitr, rmarkdown
+LinkingTo: Rcpp, RcppArmadillo
+SystemRequirements: OpenMP (optional)
+Config/testthat/edition: 3
+VignetteBuilder: knitr
+</file>
+
+</files>

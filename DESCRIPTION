@@ -1,0 +1,18 @@
+Package: fmriAR
+Type: Package
+Title: Fast AR/ARMA Prewhitening for fMRI Design and Data
+Version: 0.0.0.9000
+Authors@R: person("Your", "Name", email = "you@example.com", role = c("aut","cre"))
+Description: Lightweight utilities to estimate AR/ARMA noise models from residuals and apply matched GLS prewhitening to fMRI design and data matrices. Run-aware and censor-aware; small exported surface; C++ core for speed.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2.9000
+Depends: R (>= 4.0)
+Imports: Rcpp, stats
+Suggests: testthat (>= 3.0.0), knitr, rmarkdown, abind
+LinkingTo: Rcpp, RcppArmadillo
+SystemRequirements: OpenMP (optional)
+Config/testthat/edition: 3
+VignetteBuilder: knitr
+URL: https://bbuchsbaum.github.io/fmriAR/

@@ -1,0 +1,219 @@
+---
+title: "Getting Started with fmriAR"
+author: "fmriAR Team"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Getting Started with fmriAR}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#",
+  fig.width = 7,
+  fig.height = 5
+)
+```
+
+## Overview
+
+`fmriAR` provides lightweight tools for estimating autoregressive (AR) or autoregressive–moving-average (ARMA) noise models from fMRI residuals and applying matched prewhitening to both design matrices and voxel-wise data. The C++ core keeps large-scale whitening fast, while the R interface stays compact and flexible.
+
+This vignette walks through a typical workflow:
+
+- Fit an AR model to residuals from an initial OLS regression.
+- Apply run-aware prewhitening to design and data matrices.
+- Inspect innovations to verify whitening quality.
+- Optionally pool information across parcels with the multiscale shrinkage helpers.
+- Fit an ARMA model when residuals exhibit MA structure.
+
+## Simulating data for the examples
+
+To make the examples reproducible, we simulate a modest fMRI-style dataset with two runs, a small design matrix, and voxel-specific AR(2) noise.
+
+```{r simulate}
+library(fmriAR)
+set.seed(42)
+
+n_time <- 240
+n_vox <- 60
+runs <- rep(1:2, each = n_time / 2)
+
+# Design matrix: intercept + task regressor
+X <- cbind(
+  intercept = 1,
+  task = rep(c(rep(0, 30), rep(1, 30)), length.out = n_time)
+)
+
+# Generate voxel time-series with AR(2) noise
+phi_true <- matrix(0, nrow = n_vox, ncol = 2)
+phi_true[, 1] <- 0.5 + rnorm(n_vox, sd = 0.05)
+phi_true[, 2] <- -0.2 + rnorm(n_vox, sd = 0.05)
+
+Y <- matrix(0, n_time, n_vox)
+innov <- matrix(rnorm(n_time * n_vox, sd = 1), n_time, n_vox)
+for (v in seq_len(n_vox)) {
+  for (t in seq_len(n_time)) {
+    ar_part <- 0
+    if (t > 1) ar_part <- ar_part + phi_true[v, 1] * Y[t - 1, v]
+    if (t > 2) ar_part <- ar_part + phi_true[v, 2] * Y[t - 2, v]
+    Y[t, v] <- ar_part + innov[t, v]
+  }
+}
+
+# Add task signal to half the voxels
+beta <- c(0, 1.5)
+Y_signal <- drop(X %*% beta)
+Y[, 1:30] <- sweep(Y[, 1:30], 1, Y_signal, "+")
+
+# Residuals from initial OLS fit
+coeff_ols <- qr.solve(X, Y)
+resid <- Y - X %*% coeff_ols
+```
+
+## Fitting an AR model
+
+The primary entry point is `fit_noise()`. When `method = "ar"` and `p = "auto"`, the function selects the AR order per run using BIC, then enforces stationarity.
+
+```{r fit-ar}
+plan_ar <- fit_noise(
+  resid,
+  runs = runs,
+  method = "ar",
+  p = "auto",
+  p_max = 6,
+  exact_first = "ar1",
+  pooling = "run"
+)
+
+plan_ar
+```
+
+The returned `fmriAR_plan` holds run-specific AR coefficients and metadata about the estimation procedure.
+
+## Whitening design and data matrices
+
+`whiten_apply()` takes the plan, design matrix, and observed data and returns whitened versions that can be used in GLS estimation or downstream analyses.
+
+```{r whiten-run}
+whitened <- whiten_apply(plan_ar, X, Y, runs = runs)
+str(whitened)
+```
+
+By default the function returns whitened `X` and `Y`. You can compute GLS coefficients with a single linear solve:
+
+```{r gls}
+Xw <- whitened$X
+Yw <- whitened$Y
+beta_gls <- qr.solve(Xw, Yw[, 1:5])
+beta_gls
+```
+
+## Inspecting innovations
+
+The whitened residuals (innovations) should look close to white noise. The helper below computes the average absolute autocorrelation across voxels.
+
+```{r whiteness}
+innov_var <- Yw - Xw %*% qr.solve(Xw, Yw)
+lag_stats <- apply(innov_var, 2, function(y) {
+  ac <- acf(y, plot = FALSE, lag.max = 5)$acf[-1]
+  mean(abs(ac))
+})
+mean(lag_stats)
+```
+
+For comparison, the same calculation on the pre-whitened residuals is typically much larger.
+
+```{r whiteness-raw}
+lag_stats_raw <- apply(resid, 2, function(y) {
+  ac <- acf(y, plot = FALSE, lag.max = 5)$acf[-1]
+  mean(abs(ac))
+})
+mean(lag_stats_raw)
+```
+
+## Parcel pooling and multiscale shrinkage
+
+When per-voxel residuals are noisy, you can pool information across parcels. The example below constructs synthetic parcels and uses the multiscale PACF-weighted shrinkage.
+
+Under the hood, `fit_noise(..., pooling = "parcel")` builds parcel-level mean residual series at one or more spatial resolutions (fine/medium/coarse). Each parcel’s AR model is estimated with run-aware autocovariances, and then the coefficients are shrunk toward their parents by combining either partial autocorrelations ("pacf_weighted") or autocovariance functions ("acvf_pooled"). The weights depend on parcel size, dispersion across voxels, and the number of runs, so larger or more homogeneous parcels lend more stability to their descendants while preserving stationarity for the final per-parcel filters.
+
+```{r multiscale}
+parcels_fine <- rep(1:12, each = n_vox / 12)
+parcels_medium <- rep(1:6, each = n_vox / 6)
+parcels_coarse <- rep(1:3, each = n_vox / 3)
+
+plan_parcel <- fit_noise(
+  resid,
+  runs = runs,
+  method = "ar",
+  p = "auto",
+  p_max = 6,
+  pooling = "parcel",
+  parcels = parcels_fine,
+  parcel_sets = list(
+    fine = parcels_fine,
+    medium = parcels_medium,
+    coarse = parcels_coarse
+  ),
+  multiscale = "pacf_weighted"
+)
+
+plan_parcel$order
+```
+
+When parcel pooling is requested, `whiten_apply()` returns `X_by`, a list of whitened design matrices per parcel, along with the voxel-wise `Y` innovations.
+
+```{r whiten-parcel}
+whitened_parcel <- whiten_apply(plan_parcel, X, Y, runs = runs, parcels = parcels_fine)
+length(whitened_parcel$X_by)
+```
+
+## Fitting ARMA models
+
+Some datasets require ARMA models to capture remaining MA structure. The workflow mirrors the AR case but sets `method = "arma"` and supplies orders `(p, q)`.
+
+```{r arma}
+plan_arma <- fit_noise(
+  resid,
+  runs = runs,
+  method = "arma",
+  p = 2,
+  q = 1,
+  hr_iter = 1
+)
+
+plan_arma$order
+```
+
+ARMA whitening uses the same `whiten_apply()` interface.
+
+```{r arma-whiten}
+whitened_arma <- whiten_apply(plan_arma, X, Y, runs = runs)
+whitened_arma$X[1:5, ]
+```
+
+## Diagnostics and sandwich estimates
+
+The package includes helpers for quick diagnostics and variance estimation:
+
+```{r diagnostics}
+# Autocorrelation diagnostics for whitened residuals
+acorr <- acorr_diagnostics(Yw[, 1:3])
+acorr
+
+# Sandwich standard errors from whitened residuals
+sandwich <- sandwich_from_whitened_resid(whitened$X, whitened$Y[, 1:3])
+sandwich$se
+```
+
+## Next steps
+
+- Explore the test suite in `tests/testthat` for additional usage patterns, including multiscale pooling and ARMA recovery checks.
+- Inspect the exported `fmriAR_plan` object with `plan_info()` to see per-run or per-parcel coefficients.
+- Combine `whiten_apply()` with GLS modelling packages to build end-to-end prewhitened analyses.
+
+For production usage, consider benchmarking with your acquisition parameters and reviewing the package README for tuning options such as thread control and censor handling.

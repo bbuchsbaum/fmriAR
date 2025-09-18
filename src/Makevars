@@ -1,0 +1,4 @@
+# CXX_STD = CXX11  # C++11 is required for auto keyword and range-based for loops
+# Uncomment to enable OpenMP (requires compatible toolchain)
+# PKG_CXXFLAGS += -fopenmp
+# PKG_LIBS += -fopenmp
