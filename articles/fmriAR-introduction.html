@@ -58,7 +58,7 @@
                         <h4 data-toc-skip class="author">fmriAR
 Team</h4>
             
-            <h4 data-toc-skip class="date">2025-09-18</h4>
+            <h4 data-toc-skip class="date">2025-09-20</h4>
       
 
       <div class="d-none name"><code>fmriAR-introduction.Rmd</code></div>
@@ -74,15 +74,13 @@ autoregressive (AR) or autoregressive–moving-average (ARMA) noise models
 from fMRI residuals and applying matched prewhitening to both design
 matrices and voxel-wise data. The C++ core keeps large-scale whitening
 fast, while the R interface stays compact and flexible.</p>
-<p>This vignette walks through a typical workflow:</p>
-<ul>
-<li>Fit an AR model to residuals from an initial OLS regression.</li>
-<li>Apply run-aware prewhitening to design and data matrices.</li>
-<li>Inspect innovations to verify whitening quality.</li>
-<li>Optionally pool information across parcels with the multiscale
-shrinkage helpers.</li>
-<li>Fit an ARMA model when residuals exhibit MA structure.</li>
-</ul>
+<p>This vignette walks through a typical workflow. We start by fitting
+an AR model to residuals from an initial OLS regression, then apply the
+resulting run-aware whitening plan to both the design matrix and the
+voxel data. With the innovations in hand we check that low-lag
+autocorrelation has been suppressed, explore how multiscale pooling
+stabilises parcel-level estimates, and finish with a brief look at ARMA
+models when MA structure remains.</p>
 </div>
 <div class="section level2">
 <h2 id="simulating-data-for-the-examples">Simulating data for the examples<a class="anchor" aria-label="anchor" href="#simulating-data-for-the-examples"></a>
@@ -213,6 +211,34 @@ baseline.</p>
 <span><span class="op">}</span><span class="op">)</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/mean.html" class="external-link">mean</a></span><span class="op">(</span><span class="va">lag_stats_raw</span><span class="op">)</span></span>
 <span><span class="co"># [1] 0.140151</span></span></code></pre></div>
+<div class="sourceCode" id="cb7"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="va">avg_acf</span> <span class="op">&lt;-</span> <span class="kw">function</span><span class="op">(</span><span class="va">mat</span>, <span class="va">lag.max</span> <span class="op">=</span> <span class="fl">20</span><span class="op">)</span> <span class="op">{</span></span>
+<span>  <span class="va">acf_vals</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/lapply.html" class="external-link">sapply</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/seq.html" class="external-link">seq_len</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/nrow.html" class="external-link">ncol</a></span><span class="op">(</span><span class="va">mat</span><span class="op">)</span><span class="op">)</span>, <span class="kw">function</span><span class="op">(</span><span class="va">j</span><span class="op">)</span> <span class="op">{</span></span>
+<span>    <span class="fu">stats</span><span class="fu">::</span><span class="fu"><a href="https://rdrr.io/r/stats/acf.html" class="external-link">acf</a></span><span class="op">(</span><span class="va">mat</span><span class="op">[</span>, <span class="va">j</span><span class="op">]</span>, plot <span class="op">=</span> <span class="cn">FALSE</span>, lag.max <span class="op">=</span> <span class="va">lag.max</span><span class="op">)</span><span class="op">$</span><span class="va">acf</span></span>
+<span>  <span class="op">}</span><span class="op">)</span></span>
+<span>  <span class="fu"><a href="https://rdrr.io/r/base/colSums.html" class="external-link">rowMeans</a></span><span class="op">(</span><span class="va">acf_vals</span><span class="op">)</span></span>
+<span><span class="op">}</span></span>
+<span></span>
+<span><span class="va">lag_max</span> <span class="op">&lt;-</span> <span class="fl">20</span></span>
+<span><span class="va">lags</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/seq.html" class="external-link">seq_len</a></span><span class="op">(</span><span class="va">lag_max</span><span class="op">)</span></span>
+<span><span class="va">acf_raw</span> <span class="op">&lt;-</span> <span class="fu">avg_acf</span><span class="op">(</span><span class="va">resid</span>, lag.max <span class="op">=</span> <span class="va">lag_max</span><span class="op">)</span></span>
+<span><span class="va">acf_white</span> <span class="op">&lt;-</span> <span class="fu">avg_acf</span><span class="op">(</span><span class="va">innov_var</span>, lag.max <span class="op">=</span> <span class="va">lag_max</span><span class="op">)</span></span>
+<span></span>
+<span><span class="va">ylim</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/range.html" class="external-link">range</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="va">acf_raw</span><span class="op">[</span><span class="op">-</span><span class="fl">1L</span><span class="op">]</span>, <span class="va">acf_white</span><span class="op">[</span><span class="op">-</span><span class="fl">1L</span><span class="op">]</span>, <span class="fl">0</span><span class="op">)</span><span class="op">)</span></span>
+<span><span class="fu"><a href="https://rdrr.io/r/graphics/plot.default.html" class="external-link">plot</a></span><span class="op">(</span><span class="va">lags</span>, <span class="va">acf_raw</span><span class="op">[</span><span class="op">-</span><span class="fl">1L</span><span class="op">]</span>, type <span class="op">=</span> <span class="st">"h"</span>, lwd <span class="op">=</span> <span class="fl">2</span>, col <span class="op">=</span> <span class="st">"#1b9e77"</span>,</span>
+<span>     ylim <span class="op">=</span> <span class="va">ylim</span>, xlab <span class="op">=</span> <span class="st">"Lag"</span>, ylab <span class="op">=</span> <span class="st">"Average autocorrelation"</span>,</span>
+<span>     main <span class="op">=</span> <span class="st">"Mean autocorrelation across voxels"</span><span class="op">)</span></span>
+<span><span class="fu"><a href="https://rdrr.io/r/graphics/lines.html" class="external-link">lines</a></span><span class="op">(</span><span class="va">lags</span>, <span class="va">acf_white</span><span class="op">[</span><span class="op">-</span><span class="fl">1L</span><span class="op">]</span>, type <span class="op">=</span> <span class="st">"h"</span>, lwd <span class="op">=</span> <span class="fl">2</span>, col <span class="op">=</span> <span class="st">"#d95f02"</span><span class="op">)</span></span>
+<span><span class="fu"><a href="https://rdrr.io/r/graphics/abline.html" class="external-link">abline</a></span><span class="op">(</span>h <span class="op">=</span> <span class="fl">0</span>, col <span class="op">=</span> <span class="st">"grey70"</span>, lty <span class="op">=</span> <span class="fl">2</span><span class="op">)</span></span>
+<span><span class="fu"><a href="https://rdrr.io/r/graphics/legend.html" class="external-link">legend</a></span><span class="op">(</span><span class="st">"topright"</span>,</span>
+<span>       legend <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"Raw residuals"</span>, <span class="st">"Whitened innovations"</span><span class="op">)</span>,</span>
+<span>       col <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"#1b9e77"</span>, <span class="st">"#d95f02"</span><span class="op">)</span>,</span>
+<span>       lwd <span class="op">=</span> <span class="fl">2</span>, bty <span class="op">=</span> <span class="st">"n"</span><span class="op">)</span></span></code></pre></div>
+<div class="figure">
+<img src="fmriAR-introduction_files/figure-html/whiteness-plot-1.png" alt="Average autocorrelation across voxels before and after whitening" width="672"><p class="caption">
+Average autocorrelation across voxels before and after whitening
+</p>
+</div>
 </div>
 <div class="section level2">
 <h2 id="parcel-pooling-and-multiscale-shrinkage">Parcel pooling and multiscale shrinkage<a class="anchor" aria-label="anchor" href="#parcel-pooling-and-multiscale-shrinkage"></a>
@@ -230,7 +256,7 @@ weights depend on parcel size, dispersion across voxels, and the number
 of runs, so larger or more homogeneous parcels lend more stability to
 their descendants while preserving stationarity for the final per-parcel
 filters.</p>
-<div class="sourceCode" id="cb7"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb8"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">parcels_fine</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/rep.html" class="external-link">rep</a></span><span class="op">(</span><span class="fl">1</span><span class="op">:</span><span class="fl">12</span>, each <span class="op">=</span> <span class="va">n_vox</span> <span class="op">/</span> <span class="fl">12</span><span class="op">)</span></span>
 <span><span class="va">parcels_medium</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/rep.html" class="external-link">rep</a></span><span class="op">(</span><span class="fl">1</span><span class="op">:</span><span class="fl">6</span>, each <span class="op">=</span> <span class="va">n_vox</span> <span class="op">/</span> <span class="fl">6</span><span class="op">)</span></span>
 <span><span class="va">parcels_coarse</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/rep.html" class="external-link">rep</a></span><span class="op">(</span><span class="fl">1</span><span class="op">:</span><span class="fl">3</span>, each <span class="op">=</span> <span class="va">n_vox</span> <span class="op">/</span> <span class="fl">3</span><span class="op">)</span></span>
@@ -257,7 +283,7 @@ filters.</p>
 <p>When parcel pooling is requested, <code><a href="../reference/whiten_apply.html">whiten_apply()</a></code> returns
 <code>X_by</code>, a list of whitened design matrices per parcel, along
 with the voxel-wise <code>Y</code> innovations.</p>
-<div class="sourceCode" id="cb8"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb9"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">whitened_parcel</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/whiten_apply.html">whiten_apply</a></span><span class="op">(</span><span class="va">plan_parcel</span>, <span class="va">X</span>, <span class="va">Y</span>, runs <span class="op">=</span> <span class="va">runs</span>, parcels <span class="op">=</span> <span class="va">parcels_fine</span><span class="op">)</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/length.html" class="external-link">length</a></span><span class="op">(</span><span class="va">whitened_parcel</span><span class="op">$</span><span class="va">X_by</span><span class="op">)</span></span>
 <span><span class="co"># [1] 12</span></span></code></pre></div>
@@ -268,7 +294,7 @@ with the voxel-wise <code>Y</code> innovations.</p>
 <p>Some datasets require ARMA models to capture remaining MA structure.
 The workflow mirrors the AR case but sets <code>method = "arma"</code>
 and supplies orders <code>(p, q)</code>.</p>
-<div class="sourceCode" id="cb9"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb10"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">plan_arma</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fit_noise.html">fit_noise</a></span><span class="op">(</span></span>
 <span>  <span class="va">resid</span>,</span>
 <span>  runs <span class="op">=</span> <span class="va">runs</span>,</span>
@@ -283,7 +309,7 @@ and supplies orders <code>(p, q)</code>.</p>
 <span><span class="co"># 2 1</span></span></code></pre></div>
 <p>ARMA whitening uses the same <code><a href="../reference/whiten_apply.html">whiten_apply()</a></code>
 interface.</p>
-<div class="sourceCode" id="cb10"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb11"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">whitened_arma</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/whiten_apply.html">whiten_apply</a></span><span class="op">(</span><span class="va">plan_arma</span>, <span class="va">X</span>, <span class="va">Y</span>, runs <span class="op">=</span> <span class="va">runs</span><span class="op">)</span></span>
 <span><span class="va">whitened_arma</span><span class="op">$</span><span class="va">X</span><span class="op">[</span><span class="fl">1</span><span class="op">:</span><span class="fl">5</span>, <span class="op">]</span></span>
 <span><span class="co">#      intercept task</span></span>
@@ -294,11 +320,49 @@ interface.</p>
 <span><span class="co"># [5,] 0.6876133    0</span></span></code></pre></div>
 </div>
 <div class="section level2">
+<h2 id="afni-style-restricted-ar-filters">AFNI-style restricted AR filters<a class="anchor" aria-label="anchor" href="#afni-style-restricted-ar-filters"></a>
+</h2>
+<p>If you need to replicate AFNI’s “restricted ARMA” family—real +
+complex AR roots with optional additive white noise—<code>fmriAR</code>
+provides an internal helper that constructs matching whitening plans.
+The function lives inside the package namespace as
+<code>fmriAR:::afni_restricted_plan()</code> to keep the public API
+focused on the core AR/ARMA workflow, but it produces the same
+<code>fmriAR_plan</code> objects used elsewhere.</p>
+<p>The helper expects the AFNI root parameterisation (a real root
+<code>a</code>, complex pairs defined by radius/angle, and an optional
+MA(1) refinement) and can operate globally or per parcel. Because the
+interface mirrors AFNI’s internals, it is a convenient bridge when
+comparing pipelines or validating fmriAR against established AFNI
+analyses.</p>
+<div class="sourceCode" id="cb12"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="co"># Example: AFNI-style AR(3) with optional MA(1) term</span></span>
+<span><span class="va">roots</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>a <span class="op">=</span> <span class="fl">0.6</span>, r1 <span class="op">=</span> <span class="fl">0.7</span>, t1 <span class="op">=</span> <span class="va">pi</span> <span class="op">/</span> <span class="fl">6</span><span class="op">)</span></span>
+<span></span>
+<span><span class="va">plan_afni</span> <span class="op">&lt;-</span> <span class="fu">fmriAR</span><span class="fu">:::</span><span class="fu"><a href="../reference/afni_restricted_plan.html">afni_restricted_plan</a></span><span class="op">(</span></span>
+<span>  resid <span class="op">=</span> <span class="va">resid</span>,</span>
+<span>  runs <span class="op">=</span> <span class="va">runs</span>,</span>
+<span>  parcels <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  p <span class="op">=</span> <span class="fl">3L</span>,</span>
+<span>  roots <span class="op">=</span> <span class="va">roots</span>,</span>
+<span>  estimate_ma1 <span class="op">=</span> <span class="cn">TRUE</span></span>
+<span><span class="op">)</span></span>
+<span></span>
+<span><span class="va">plan_afni</span><span class="op">$</span><span class="va">order</span></span>
+<span></span>
+<span><span class="co"># Apply whitening just like any other plan</span></span>
+<span><span class="va">whitened_afni</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/whiten_apply.html">whiten_apply</a></span><span class="op">(</span><span class="va">plan_afni</span>, <span class="va">X</span>, <span class="va">Y</span>, runs <span class="op">=</span> <span class="va">runs</span><span class="op">)</span></span></code></pre></div>
+<p>Tip: set <code>estimate_ma1 = FALSE</code> to obtain the pure AR
+filter implied by the AFNI roots, or provide a list of root
+specifications keyed by parcel ID to drive parcel-specific filters that
+mirror AFNI’s voxel grouping.</p>
+</div>
+<div class="section level2">
 <h2 id="diagnostics-and-sandwich-estimates">Diagnostics and sandwich estimates<a class="anchor" aria-label="anchor" href="#diagnostics-and-sandwich-estimates"></a>
 </h2>
 <p>The package includes helpers for quick diagnostics and variance
 estimation:</p>
-<div class="sourceCode" id="cb11"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb13"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="co"># Autocorrelation diagnostics for whitened residuals</span></span>
 <span><span class="va">acorr</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/acorr_diagnostics.html">acorr_diagnostics</a></span><span class="op">(</span><span class="va">Yw</span><span class="op">[</span>, <span class="fl">1</span><span class="op">:</span><span class="fl">3</span><span class="op">]</span><span class="op">)</span></span>
 <span><span class="va">acorr</span></span>
