@@ -9,6 +9,10 @@ parcel_means_cpp <- function(resid, parcels, K = -1L, na_rm = FALSE) {
     .Call(`_fmriAR_parcel_means_cpp`, resid, parcels, K, na_rm)
 }
 
+run_avg_acvf_cpp <- function(mat, max_lag) {
+    .Call(`_fmriAR_run_avg_acvf_cpp`, mat, max_lag)
+}
+
 segmented_acvf_cpp <- function(y, run_starts, max_lag, unbiased = FALSE, center = TRUE) {
     .Call(`_fmriAR_segmented_acvf_cpp`, y, run_starts, max_lag, unbiased, center)
 }

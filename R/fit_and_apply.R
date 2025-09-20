@@ -47,21 +47,7 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 
 .run_avg_acvf <- function(mat, max_lag) {
   if (!is.matrix(mat)) mat <- as.matrix(mat)
-  n <- nrow(mat)
-  v <- ncol(mat)
-  if (n == 0L || v == 0L) return(rep(0, max(0L, max_lag) + 1L))
-  max_lag <- max(0L, min(as.integer(max_lag), n - 1L))
-  centered <- sweep(mat, 2L, colMeans(mat))
-  out <- numeric(max_lag + 1L)
-  out[1] <- mean(centered^2)
-  if (max_lag >= 1L) {
-    for (lag in seq_len(max_lag)) {
-      rows <- seq_len(n - lag)
-      out[lag + 1L] <- mean(centered[rows + lag, , drop = FALSE] *
-                             centered[rows, , drop = FALSE])
-    }
-  }
-  out
+  run_avg_acvf_cpp(mat, as.integer(max_lag))
 }
 
 .estimate_ar_series <- function(y, p_max) {
@@ -222,6 +208,7 @@ fit_noise <- function(resid = NULL,
   }
 
   n <- nrow(resid)
+  if (n < 10) stop("series too short")
   Rsets <- if (is.null(runs)) list(seq_len(n)) else split(seq_len(n), as.integer(runs))
   run_mats <- lapply(Rsets, function(idx) resid[idx, , drop = FALSE])
 

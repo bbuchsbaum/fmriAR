@@ -22,13 +22,7 @@ knitr::opts_chunk$set(
 
 `fmriAR` provides lightweight tools for estimating autoregressive (AR) or autoregressive–moving-average (ARMA) noise models from fMRI residuals and applying matched prewhitening to both design matrices and voxel-wise data. The C++ core keeps large-scale whitening fast, while the R interface stays compact and flexible.
 
-This vignette walks through a typical workflow:
-
-- Fit an AR model to residuals from an initial OLS regression.
-- Apply run-aware prewhitening to design and data matrices.
-- Inspect innovations to verify whitening quality.
-- Optionally pool information across parcels with the multiscale shrinkage helpers.
-- Fit an ARMA model when residuals exhibit MA structure.
+This vignette walks through a typical workflow. We start by fitting an AR model to residuals from an initial OLS regression, then apply the resulting run-aware whitening plan to both the design matrix and the voxel data. With the innovations in hand we check that low-lag autocorrelation has been suppressed, explore how multiscale pooling stabilises parcel-level estimates, and finish with a brief look at ARMA models when MA structure remains.
 
 ## Simulating data for the examples
 
@@ -137,6 +131,31 @@ lag_stats_raw <- apply(resid, 2, function(y) {
 mean(lag_stats_raw)
 ```
 
+```{r whiteness-plot, fig.cap = "Average autocorrelation across voxels before and after whitening"}
+avg_acf <- function(mat, lag.max = 20) {
+  acf_vals <- sapply(seq_len(ncol(mat)), function(j) {
+    stats::acf(mat[, j], plot = FALSE, lag.max = lag.max)$acf
+  })
+  rowMeans(acf_vals)
+}
+
+lag_max <- 20
+lags <- seq_len(lag_max)
+acf_raw <- avg_acf(resid, lag.max = lag_max)
+acf_white <- avg_acf(innov_var, lag.max = lag_max)
+
+ylim <- range(c(acf_raw[-1L], acf_white[-1L], 0))
+plot(lags, acf_raw[-1L], type = "h", lwd = 2, col = "#1b9e77",
+     ylim = ylim, xlab = "Lag", ylab = "Average autocorrelation",
+     main = "Mean autocorrelation across voxels")
+lines(lags, acf_white[-1L], type = "h", lwd = 2, col = "#d95f02")
+abline(h = 0, col = "grey70", lty = 2)
+legend("topright",
+       legend = c("Raw residuals", "Whitened innovations"),
+       col = c("#1b9e77", "#d95f02"),
+       lwd = 2, bty = "n")
+```
+
 ## Parcel pooling and multiscale shrinkage
 
 When per-voxel residuals are noisy, you can pool information across parcels. The example below constructs synthetic parcels and uses the multiscale PACF-weighted shrinkage.
@@ -197,6 +216,33 @@ ARMA whitening uses the same `whiten_apply()` interface.
 whitened_arma <- whiten_apply(plan_arma, X, Y, runs = runs)
 whitened_arma$X[1:5, ]
 ```
+
+## AFNI-style restricted AR filters
+
+If you need to replicate AFNI's "restricted ARMA" family—real + complex AR roots with optional additive white noise—`fmriAR` provides an internal helper that constructs matching whitening plans. The function lives inside the package namespace as `fmriAR:::afni_restricted_plan()` to keep the public API focused on the core AR/ARMA workflow, but it produces the same `fmriAR_plan` objects used elsewhere.
+
+The helper expects the AFNI root parameterisation (a real root `a`, complex pairs defined by radius/angle, and an optional MA(1) refinement) and can operate globally or per parcel. Because the interface mirrors AFNI's internals, it is a convenient bridge when comparing pipelines or validating fmriAR against established AFNI analyses.
+
+```{r afni-plan, eval = FALSE}
+# Example: AFNI-style AR(3) with optional MA(1) term
+roots <- list(a = 0.6, r1 = 0.7, t1 = pi / 6)
+
+plan_afni <- fmriAR:::afni_restricted_plan(
+  resid = resid,
+  runs = runs,
+  parcels = NULL,
+  p = 3L,
+  roots = roots,
+  estimate_ma1 = TRUE
+)
+
+plan_afni$order
+
+# Apply whitening just like any other plan
+whitened_afni <- whiten_apply(plan_afni, X, Y, runs = runs)
+```
+
+Tip: set `estimate_ma1 = FALSE` to obtain the pure AR filter implied by the AFNI roots, or provide a list of root specifications keyed by parcel ID to drive parcel-specific filters that mirror AFNI's voxel grouping.
 
 ## Diagnostics and sandwich estimates
 

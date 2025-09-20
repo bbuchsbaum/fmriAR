@@ -40,6 +40,18 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// run_avg_acvf_cpp
+NumericVector run_avg_acvf_cpp(const NumericMatrix& mat, int max_lag);
+RcppExport SEXP _fmriAR_run_avg_acvf_cpp(SEXP matSEXP, SEXP max_lagSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const NumericMatrix& >::type mat(matSEXP);
+    Rcpp::traits::input_parameter< int >::type max_lag(max_lagSEXP);
+    rcpp_result_gen = Rcpp::wrap(run_avg_acvf_cpp(mat, max_lag));
+    return rcpp_result_gen;
+END_RCPP
+}
 // segmented_acvf_cpp
 NumericVector segmented_acvf_cpp(const NumericVector& y, const IntegerVector& run_starts, int max_lag, bool unbiased, bool center);
 RcppExport SEXP _fmriAR_segmented_acvf_cpp(SEXP ySEXP, SEXP run_startsSEXP, SEXP max_lagSEXP, SEXP unbiasedSEXP, SEXP centerSEXP) {
@@ -104,6 +116,7 @@ END_RCPP
 static const R_CallMethodDef CallEntries[] = {
     {"_fmriAR_hr_arma_fit_cpp", (DL_FUNC) &_fmriAR_hr_arma_fit_cpp, 5},
     {"_fmriAR_parcel_means_cpp", (DL_FUNC) &_fmriAR_parcel_means_cpp, 4},
+    {"_fmriAR_run_avg_acvf_cpp", (DL_FUNC) &_fmriAR_run_avg_acvf_cpp, 2},
     {"_fmriAR_segmented_acvf_cpp", (DL_FUNC) &_fmriAR_segmented_acvf_cpp, 5},
     {"_fmriAR_yw_from_acvf_cpp", (DL_FUNC) &_fmriAR_yw_from_acvf_cpp, 2},
     {"_fmriAR_arma_whiten_inplace", (DL_FUNC) &_fmriAR_arma_whiten_inplace, 7},

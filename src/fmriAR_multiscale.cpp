@@ -62,6 +62,59 @@ NumericMatrix parcel_means_cpp(const NumericMatrix& resid,
 }
 
 // [[Rcpp::export]]
+NumericVector run_avg_acvf_cpp(const NumericMatrix& mat, int max_lag) {
+  const int n = mat.nrow();
+  const int v = mat.ncol();
+  if (max_lag < 0) stop("max_lag must be >= 0");
+  if (n == 0 || v == 0) {
+    return NumericVector(static_cast<R_xlen_t>(std::max(0, max_lag) + 1));
+  }
+
+  const int capped_lag = std::max(0, std::min(max_lag, n - 1));
+  NumericVector gamma(capped_lag + 1);
+  std::vector<double> means(v, 0.0);
+
+  for (int j = 0; j < v; ++j) {
+    const double* col = &mat(0, j);
+    double sum = 0.0;
+    for (int i = 0; i < n; ++i) sum += col[i];
+    means[j] = sum / static_cast<double>(n);
+  }
+
+  double acc0 = 0.0;
+  for (int j = 0; j < v; ++j) {
+    const double* col = &mat(0, j);
+    const double mu = means[j];
+    for (int i = 0; i < n; ++i) {
+      const double centered = col[i] - mu;
+      acc0 += centered * centered;
+    }
+  }
+  gamma[0] = acc0 / (static_cast<double>(n) * static_cast<double>(v));
+
+  for (int lag = 1; lag <= capped_lag; ++lag) {
+    double acc = 0.0;
+    const int pairs = n - lag;
+    if (pairs <= 0) {
+      gamma[lag] = 0.0;
+      continue;
+    }
+    for (int j = 0; j < v; ++j) {
+      const double* col = &mat(0, j);
+      const double mu = means[j];
+      for (int t = lag; t < n; ++t) {
+        const double yt = col[t] - mu;
+        const double ylag = col[t - lag] - mu;
+        acc += yt * ylag;
+      }
+    }
+    gamma[lag] = acc / (static_cast<double>(pairs) * static_cast<double>(v));
+  }
+
+  return gamma;
+}
+
+// [[Rcpp::export]]
 NumericVector segmented_acvf_cpp(const NumericVector& y,
                                  const IntegerVector& run_starts,
                                  int max_lag,

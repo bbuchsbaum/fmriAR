@@ -22,10 +22,10 @@ print.fmriAR_plan <- function(x, ...) {
   runs <- x$runs
   if (!is.null(runs)) {
     run_levels <- unique(runs)
-    shown <- head(run_levels, 5L)
+    shown <- utils::head(run_levels, 5L)
     cat("  Runs: ", length(run_levels),
         if (length(run_levels)) paste0(" (", paste(as.character(shown), collapse = ", "),
-                                       if (length(run_levels) > length(shown)) ", …" else "",
+                                       if (length(run_levels) > length(shown)) ", ..." else "",
                                        ")") else "",
         "\n", sep = "")
   }
@@ -86,7 +86,7 @@ print.fmriAR_plan <- function(x, ...) {
         }
         cat(line, "\n", sep = "")
       }
-      if (n_parcels > length(show_idx)) cat("      …\n")
+      if (n_parcels > length(show_idx)) cat("      ...\n")
     }
   } else {
     phi_list <- x$phi
@@ -116,9 +116,8 @@ print.fmriAR_plan <- function(x, ...) {
       }
       cat(line, "\n", sep = "")
     }
-    if (length(phi_list) > length(show_idx)) cat("    …\n")
+    if (length(phi_list) > length(show_idx)) cat("    ...\n")
   }
 
   invisible(x)
 }
-

@@ -23,6 +23,12 @@ The fmriAR package provides efficient implementations for:
 \seealso{
 Useful links:
 \itemize{
+  \item \url{https://bbuchsbaum.github.io/fmriAR/}
+}
+
+
+Useful links:
+\itemize{
 \item \code{\link{fit_noise}} for noise model estimation
 \item \code{\link{whiten_apply}} for applying whitening transformations
 \item \code{\link{whiten}} for one-step whitening
