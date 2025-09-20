@@ -3,7 +3,13 @@ Type: Package
 Title: Fast AR/ARMA Prewhitening for fMRI Design and Data
 Version: 0.0.0.9000
 Authors@R: person("Your", "Name", email = "you@example.com", role = c("aut","cre"))
-Description: Lightweight utilities to estimate AR/ARMA noise models from residuals and apply matched GLS prewhitening to fMRI design and data matrices. Run-aware and censor-aware; small exported surface; C++ core for speed.
+Description: Lightweight utilities to estimate AR/ARMA noise models from
+    residuals and apply matched GLS prewhitening to fMRI design and data
+    matrices. Run-aware and censor-aware; small exported surface; C++ core for
+    speed. The ARMA estimator follows Hannan and Rissanen (1982)
+    <doi:10.1093/biomet/69.2.293>, and the AFNI-inspired restricted AR family
+    mirrors the workflow described by Cox (2012)
+    <doi:10.1016/j.neuroimage.2011.08.056>.
 License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
