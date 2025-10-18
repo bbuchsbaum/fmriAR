@@ -1,4 +1,8 @@
 # CXX_STD = CXX11  # C++11 is required for auto keyword and range-based for loops
-# Uncomment to enable OpenMP (requires compatible toolchain)
-# PKG_CXXFLAGS += -fopenmp
-# PKG_LIBS += -fopenmp
+# OpenMP: enable via user/site Makevars if desired (e.g., add -fopenmp)
+
+# Ensure Armadillo links against R's BLAS/LAPACK on all platforms
+PKG_LIBS = $(LAPACK_LIBS) $(BLAS_LIBS) $(FLIBS)
+
+# Use the current Armadillo API to avoid fallback compilation notes
+PKG_CPPFLAGS = -DARMA_USE_CURRENT

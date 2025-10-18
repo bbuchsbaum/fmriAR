@@ -55,6 +55,9 @@
 #'      or a named list of such lists keyed by parcel id (character) for per-parcel specs.
 #' @param estimate_ma1 logical, if TRUE estimate MA(1) on AR residuals to mimic AFNI's additive white
 #' @param exact_first apply exact AR(1) scaling at segment starts (harmless here; default TRUE)
+#' @return An `fmriAR_plan` with `method = "afni"` that can be supplied to
+#'   [whiten_apply()].
+#' @examples NULL
 #' @keywords internal
 afni_restricted_plan <- function(resid, runs = NULL, parcels = NULL,
                                  p = 3L, roots,

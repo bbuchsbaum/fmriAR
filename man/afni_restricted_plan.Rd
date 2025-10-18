@@ -32,7 +32,14 @@ or a named list of such lists keyed by parcel id (character) for per-parcel spec
 
 \item{exact_first}{apply exact AR(1) scaling at segment starts (harmless here; default TRUE)}
 }
+\value{
+An \code{fmriAR_plan} with \code{method = "afni"} that can be supplied to
+\code{\link[=whiten_apply]{whiten_apply()}}.
+}
 \description{
 Build an AFNI-style restricted AR plan from root parameters
+}
+\examples{
+NULL
 }
 \keyword{internal}

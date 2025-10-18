@@ -4,6 +4,24 @@
 
 compat_env <- local({
 
+  # Expose AFNI-style restricted AR planning via the compat interface
+  .afni_restricted_plan_compat <- function(resid,
+                                   runs = NULL,
+                                   parcels = NULL,
+                                   p = 3L,
+                                   roots,
+                                   estimate_ma1 = TRUE,
+                                   exact_first = TRUE) {
+    # delegate to the internal helper; kept stable under compat
+    afni_restricted_plan(resid = resid,
+                         runs = runs,
+                         parcels = parcels,
+                         p = as.integer(p),
+                         roots = roots,
+                         estimate_ma1 = isTRUE(estimate_ma1),
+                         exact_first = isTRUE(exact_first))
+  }
+
   plan_from_phi <- function(phi, theta = NULL,
                             runs = NULL, parcels = NULL,
                             pooling = c("global","run","parcel"),
@@ -121,7 +139,8 @@ compat_env <- local({
        whiten_with_phi = whiten_with_phi,
        update_plan = update_plan,
        plan_info = plan_info,
-       whiteness_score = whiteness_score)
+       whiteness_score = whiteness_score,
+       afni_restricted_plan = .afni_restricted_plan_compat)
 })
 
 #' fmrireg compatibility interface
@@ -136,11 +155,20 @@ compat_env <- local({
 #'     \item \code{update_plan}: Update existing plan with new residuals
 #'     \item \code{plan_info}: Extract information from a plan object
 #'     \item \code{whiteness_score}: Compute whiteness metric from residuals
+#'     \item \code{afni_restricted_plan}: Build AFNI-style restricted AR plan from
+#'       root parameters (advanced; internal helper exposed via compat)
 #'   }
 #'
 #' @examples
 #' # Create compatibility interface
 #' compat_funcs <- compat
+#'
+#' # AFNI-style restricted AR(3) plan from roots
+#' resid <- matrix(rnorm(120), 40, 3)
+#' runs <- rep(1:2, each = 20)
+#' roots <- list(a = 0.6, r1 = 0.7, t1 = pi / 6)
+#' plan_afni <- compat_funcs$afni_restricted_plan(resid, runs = runs, p = 3L,
+#'                                                roots = roots, estimate_ma1 = FALSE)
 #'
 #' # Example: Create whitening plan from AR coefficients
 #' phi <- c(0.3, 0.1)  # AR(2) coefficients

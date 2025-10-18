@@ -2,6 +2,11 @@
 #'
 #' @param x An object returned by [fit_noise()].
 #' @param ... Unused; included for S3 compatibility.
+#' @return The input plan, invisibly.
+#' @examples
+#' resid <- matrix(rnorm(60), 20, 3)
+#' plan <- fit_noise(resid, method = "ar", p = 2)
+#' print(plan)
 #' @export
 print.fmriAR_plan <- function(x, ...) {
   cat("fmriAR whitening plan\n")

@@ -11,6 +11,14 @@
 
 \item{...}{Unused; included for S3 compatibility.}
 }
+\value{
+The input plan, invisibly.
+}
 \description{
 Pretty-print an fmriAR whitening plan
+}
+\examples{
+resid <- matrix(rnorm(60), 20, 3)
+plan <- fit_noise(resid, method = "ar", p = 2)
+print(plan)
 }

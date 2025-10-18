@@ -109,6 +109,88 @@ test_that("afni parcel plan whitens each parcel", {
   expect_true(all(vapply(out$X_by, ncol, 0L) == ncol(X)))
 })
 
+test_that("afni parcel plan falls back to default roots and stores MA estimates", {
+  withr::local_seed(505)
+  n <- 900
+  runs <- rep(1:3, each = n / 3)
+  parcels <- rep(1:3, each = 2)
+  spec_primary <- list(a = 0.45, r1 = 0.55, t1 = pi / 7)
+  phi_primary <- fmriAR:::.afni_phi_ar3(spec_primary$a, spec_primary$r1, spec_primary$t1)
+
+  # build residuals with the same AR across all parcels, plus small measurement noise
+  base_series <- sim_ar_process(phi_primary, n)
+  Y <- matrix(base_series, n, length(parcels)) + matrix(rnorm(n * length(parcels), sd = 0.1), n)
+
+  # supply roots for only the first parcel; others should reuse this spec
+  roots_partial <- list("1" = spec_primary)
+  plan <- fmriAR:::afni_restricted_plan(
+    resid = Y,
+    runs = runs,
+    parcels = parcels,
+    p = 3L,
+    roots = roots_partial,
+    estimate_ma1 = TRUE
+  )
+
+  expect_identical(plan$order[["q"]], 1L)
+  expect_equal(sort(names(plan$phi_by_parcel)), c("1", "2", "3"))
+  expect_true(all(vapply(plan$phi_by_parcel, function(phi) all.equal(phi, phi_primary, tolerance = 1e-8) == TRUE, logical(1))))
+
+  thetas <- plan$theta_by_parcel
+  expect_true(all(vapply(thetas, length, 0L) == 1L))
+  expect_true(all(abs(unlist(thetas)) < 1))
+
+  X <- cbind(1, rnorm(n))
+  out <- whiten_apply(plan, X, Y, runs = runs, parcels = parcels)
+  ci <- 1.96 / sqrt(n)
+  for (j in seq_len(ncol(out$Y))) {
+    ac <- acf(out$Y[, j], plot = FALSE, lag.max = 4, demean = TRUE)$acf[-1L]
+    expect_true(max(abs(ac)) < 4 * ci)
+  }
+})
+
+test_that("afni plan with runs applies MA estimation per segment", {
+  withr::local_seed(606)
+  run_lengths <- c(300, 350, 250)
+  runs <- rep(seq_along(run_lengths), run_lengths)
+  n <- length(runs)
+  spec <- list(a = 0.5, r1 = 0.6, t1 = pi / 6)
+  phi <- fmriAR:::.afni_phi_ar3(spec$a, spec$r1, spec$t1)
+
+  # simulate piecewise series with resets between runs
+  Y <- numeric(n)
+  idx_start <- c(1, cumsum(run_lengths)[-length(run_lengths)] + 1)
+  for (i in seq_along(run_lengths)) {
+    seg_idx <- seq(idx_start[i], length.out = run_lengths[i])
+    seg_vals <- sim_ar_process(phi, run_lengths[i])
+    Y[seg_idx] <- seg_vals + rnorm(run_lengths[i], sd = 0.15)
+  }
+  resid <- matrix(Y, n, 1)
+
+  plan <- fmriAR:::afni_restricted_plan(
+    resid = resid,
+    runs = runs,
+    parcels = NULL,
+    p = 3L,
+    roots = spec,
+    estimate_ma1 = TRUE
+  )
+
+  expect_identical(plan$order[["q"]], 1L)
+  expect_length(plan$theta[[1]], 1L)
+
+  X <- cbind(1, rnorm(n))
+  out <- whiten_apply(plan, X, resid, runs = runs)
+
+  ci <- 1.96 / sqrt(n)
+  ac <- acf(drop(out$Y), plot = FALSE, lag.max = 6, demean = TRUE)$acf[-1L]
+  expect_true(max(abs(ac)) < 4 * ci)
+
+  # ensure segment starts have finite values (no carryover across runs)
+  run_starts <- c(1, idx_start[-1])
+  expect_false(any(is.na(out$Y[run_starts, 1])))
+})
+
 test_that("afni AR(5) plan whitens matching process", {
   withr::local_seed(404)
   n <- 2500
@@ -129,4 +211,47 @@ test_that("afni AR(5) plan whitens matching process", {
   ac <- acf(ehat, plot = FALSE, lag.max = 8, demean = TRUE)$acf[-1L]
   ci <- 1.96 / sqrt(length(ehat))
   expect_true(max(abs(ac)) < 4 * ci)
+})
+
+test_that("afni_restricted_plan validates inputs", {
+  withr::local_seed(707)
+  resid <- matrix(rnorm(300), 100, 3)
+  spec <- list(a = 0.6, r1 = 0.7, t1 = pi / 6)
+
+  expect_error(
+    fmriAR:::afni_restricted_plan(
+      resid = resid,
+      runs = NULL,
+      parcels = NULL,
+      p = 4L,
+      roots = spec,
+      estimate_ma1 = FALSE
+    ),
+    regexp = "p %in% c"
+  )
+
+  bad_spec <- list(r1 = 0.7, t1 = pi / 6)
+  expect_error(
+    fmriAR:::afni_restricted_plan(
+      resid = resid,
+      runs = NULL,
+      parcels = NULL,
+      p = 3L,
+      roots = bad_spec,
+      estimate_ma1 = FALSE
+    ),
+    regexp = "roots"
+  )
+
+  expect_error(
+    fmriAR:::afni_restricted_plan(
+      resid = resid,
+      runs = NULL,
+      parcels = c(1L, 2L),
+      p = 3L,
+      roots = spec,
+      estimate_ma1 = FALSE
+    ),
+    regexp = "not TRUE"
+  )
 })

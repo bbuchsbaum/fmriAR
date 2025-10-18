@@ -5,7 +5,7 @@ fmriAR provides fast AR/ARMA-based prewhitening for fMRI GLM workflows. It estim
 ## Key capabilities
 - Automatic AR/ARMA order selection via Hannan–Rissanen initialization and iterative refinement (Hannan & Rissanen, 1982)
 - Segment-aware whitening that respects run boundaries and optional multiscale pooling across parcels
-- Convenience helpers to whiten design matrices, refit GLMs, and inspect autocorrelation diagnostics
+- Convenience helpers to whiten design matrices and inspect autocorrelation diagnostics
 
 ## Installation
 

@@ -4,9 +4,9 @@
 \name{fmriAR-package}
 \alias{fmriAR-package}
 \alias{fmriAR}
-\title{fmriAR: Fast AR/ARMA Prewhitening for fMRI Design and Data}
+\title{fmriAR: Fast Autoregressive (AR) and ARMA Prewhitening for Functional MRI (fMRI) Design and Data}
 \description{
-Lightweight utilities to estimate AR/ARMA noise models from residuals and apply matched GLS prewhitening to fMRI design and data matrices. Run-aware and censor-aware; small exported surface; C++ core for speed.
+Lightweight utilities to estimate autoregressive (AR) and autoregressive moving average (ARMA) noise models from residuals and apply matched generalized least squares (GLS) prewhitening to functional magnetic resonance imaging (fMRI) design and data matrices. The ARMA estimator follows Hannan and Rissanen (1982) \doi{10.1093/biomet/69.1.81}, and the Analysis of Functional NeuroImages (AFNI)-inspired restricted AR family mirrors the workflow described by Cox (2012) \doi{10.1016/j.neuroimage.2011.08.056}.
 
 Estimate AR/ARMA noise models from residuals and apply matched GLS
 prewhitening to fMRI design and data matrices. Run-aware and censor-aware.
@@ -35,7 +35,7 @@ Useful links:
 }
 }
 \author{
-\strong{Maintainer}: Your Name \email{you@example.com}
+\strong{Maintainer}: Bradley Buchsbaum \email{brad.buchsbaum@gmail.com}
 
 }
 \keyword{internal}

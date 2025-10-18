@@ -219,7 +219,7 @@ whitened_arma$X[1:5, ]
 
 ## AFNI-style restricted AR filters
 
-If you need to replicate AFNI's "restricted ARMA" family—real + complex AR roots with optional additive white noise—`fmriAR` provides an internal helper that constructs matching whitening plans. The function lives inside the package namespace as `fmriAR:::afni_restricted_plan()` to keep the public API focused on the core AR/ARMA workflow, but it produces the same `fmriAR_plan` objects used elsewhere.
+If you need to replicate AFNI's "restricted ARMA" family—real + complex AR roots with optional additive white noise—`fmriAR` exposes a stable wrapper via its compatibility interface: use `compat$afni_restricted_plan()` to construct matching whitening plans. This returns the same `fmriAR_plan` objects used elsewhere while keeping the main public API minimal.
 
 The helper expects the AFNI root parameterisation (a real root `a`, complex pairs defined by radius/angle, and an optional MA(1) refinement) and can operate globally or per parcel. Because the interface mirrors AFNI's internals, it is a convenient bridge when comparing pipelines or validating fmriAR against established AFNI analyses.
 
@@ -227,7 +227,7 @@ The helper expects the AFNI root parameterisation (a real root `a`, complex pair
 # Example: AFNI-style AR(3) with optional MA(1) term
 roots <- list(a = 0.6, r1 = 0.7, t1 = pi / 6)
 
-plan_afni <- fmriAR:::afni_restricted_plan(
+plan_afni <- compat$afni_restricted_plan(
   resid = resid,
   runs = runs,
   parcels = NULL,
