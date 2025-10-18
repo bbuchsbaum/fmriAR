@@ -1,11 +1,4 @@
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wunknown-warning-option"
-#endif
 #include <RcppArmadillo.h>
-#ifdef __clang__
-#pragma clang diagnostic pop
-#endif
 #include <algorithm>
 #include <vector>
 #include <complex>
