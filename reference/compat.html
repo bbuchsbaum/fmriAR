@@ -9,7 +9,7 @@ rewriting existing pipelines."></head><body>
 
     <a class="navbar-brand me-2" href="../index.html">fmriAR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.0.0.9000</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -49,7 +49,7 @@ rewriting existing pipelines.</p>
 
     <div class="section level2">
     <h2 id="format">Format<a class="anchor" aria-label="anchor" href="#format"></a></h2>
-    <p>An object of class <code>list</code> of length 5.</p>
+    <p>An object of class <code>list</code> of length 6.</p>
     </div>
     <div class="section level2">
     <h2 id="value">Value<a class="anchor" aria-label="anchor" href="#value"></a></h2>
@@ -58,12 +58,21 @@ rewriting existing pipelines.</p>
 <li><p><code>update_plan</code>: Update existing plan with new residuals</p></li>
 <li><p><code>plan_info</code>: Extract information from a plan object</p></li>
 <li><p><code>whiteness_score</code>: Compute whiteness metric from residuals</p></li>
+<li><p><code>afni_restricted_plan</code>: Build AFNI-style restricted AR plan from
+root parameters (advanced; internal helper exposed via compat)</p></li>
 </ul></div>
 
     <div class="section level2">
     <h2 id="ref-examples">Examples<a class="anchor" aria-label="anchor" href="#ref-examples"></a></h2>
     <div class="sourceCode"><pre class="sourceCode r"><code><span class="r-in"><span><span class="co"># Create compatibility interface</span></span></span>
 <span class="r-in"><span><span class="va">compat_funcs</span> <span class="op">&lt;-</span> <span class="va">compat</span></span></span>
+<span class="r-in"><span></span></span>
+<span class="r-in"><span><span class="co"># AFNI-style restricted AR(3) plan from roots</span></span></span>
+<span class="r-in"><span><span class="va">resid</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/matrix.html" class="external-link">matrix</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/stats/Normal.html" class="external-link">rnorm</a></span><span class="op">(</span><span class="fl">120</span><span class="op">)</span>, <span class="fl">40</span>, <span class="fl">3</span><span class="op">)</span></span></span>
+<span class="r-in"><span><span class="va">runs</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/rep.html" class="external-link">rep</a></span><span class="op">(</span><span class="fl">1</span><span class="op">:</span><span class="fl">2</span>, each <span class="op">=</span> <span class="fl">20</span><span class="op">)</span></span></span>
+<span class="r-in"><span><span class="va">roots</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>a <span class="op">=</span> <span class="fl">0.6</span>, r1 <span class="op">=</span> <span class="fl">0.7</span>, t1 <span class="op">=</span> <span class="va">pi</span> <span class="op">/</span> <span class="fl">6</span><span class="op">)</span></span></span>
+<span class="r-in"><span><span class="va">plan_afni</span> <span class="op">&lt;-</span> <span class="va">compat_funcs</span><span class="op">$</span><span class="fu">afni_restricted_plan</span><span class="op">(</span><span class="va">resid</span>, runs <span class="op">=</span> <span class="va">runs</span>, p <span class="op">=</span> <span class="fl">3L</span>,</span></span>
+<span class="r-in"><span>                                               roots <span class="op">=</span> <span class="va">roots</span>, estimate_ma1 <span class="op">=</span> <span class="cn">FALSE</span><span class="op">)</span></span></span>
 <span class="r-in"><span></span></span>
 <span class="r-in"><span><span class="co"># Example: Create whitening plan from AR coefficients</span></span></span>
 <span class="r-in"><span><span class="va">phi</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">0.3</span>, <span class="fl">0.1</span><span class="op">)</span>  <span class="co"># AR(2) coefficients</span></span></span>
@@ -81,7 +90,7 @@ rewriting existing pipelines.</p>
 
 
     <footer><div class="pkgdown-footer-left">
-  <p>Developed by Your Name.</p>
+  <p>Developed by Bradley Buchsbaum.</p>
 </div>
 
 <div class="pkgdown-footer-right">

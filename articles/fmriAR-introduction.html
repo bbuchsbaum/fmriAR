@@ -20,7 +20,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">fmriAR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.0.0.9000</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.1.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -58,7 +58,7 @@
                         <h4 data-toc-skip class="author">fmriAR
 Team</h4>
             
-            <h4 data-toc-skip class="date">2025-09-20</h4>
+            <h4 data-toc-skip class="date">2025-10-18</h4>
       
 
       <div class="d-none name"><code>fmriAR-introduction.Rmd</code></div>
@@ -324,11 +324,10 @@ interface.</p>
 </h2>
 <p>If you need to replicate AFNI’s “restricted ARMA” family—real +
 complex AR roots with optional additive white noise—<code>fmriAR</code>
-provides an internal helper that constructs matching whitening plans.
-The function lives inside the package namespace as
-<code>fmriAR:::afni_restricted_plan()</code> to keep the public API
-focused on the core AR/ARMA workflow, but it produces the same
-<code>fmriAR_plan</code> objects used elsewhere.</p>
+exposes a stable wrapper via its compatibility interface: use
+<code>compat$afni_restricted_plan()</code> to construct matching
+whitening plans. This returns the same <code>fmriAR_plan</code> objects
+used elsewhere while keeping the main public API minimal.</p>
 <p>The helper expects the AFNI root parameterisation (a real root
 <code>a</code>, complex pairs defined by radius/angle, and an optional
 MA(1) refinement) and can operate globally or per parcel. Because the
@@ -339,7 +338,7 @@ analyses.</p>
 <code class="sourceCode R"><span><span class="co"># Example: AFNI-style AR(3) with optional MA(1) term</span></span>
 <span><span class="va">roots</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>a <span class="op">=</span> <span class="fl">0.6</span>, r1 <span class="op">=</span> <span class="fl">0.7</span>, t1 <span class="op">=</span> <span class="va">pi</span> <span class="op">/</span> <span class="fl">6</span><span class="op">)</span></span>
 <span></span>
-<span><span class="va">plan_afni</span> <span class="op">&lt;-</span> <span class="fu">fmriAR</span><span class="fu">:::</span><span class="fu"><a href="../reference/afni_restricted_plan.html">afni_restricted_plan</a></span><span class="op">(</span></span>
+<span><span class="va">plan_afni</span> <span class="op">&lt;-</span> <span class="va">compat</span><span class="op">$</span><span class="fu">afni_restricted_plan</span><span class="op">(</span></span>
 <span>  resid <span class="op">=</span> <span class="va">resid</span>,</span>
 <span>  runs <span class="op">=</span> <span class="va">runs</span>,</span>
 <span>  parcels <span class="op">=</span> <span class="cn">NULL</span>,</span>
@@ -408,7 +407,7 @@ thread control and censor handling.</p>
 
 
     <footer><div class="pkgdown-footer-left">
-  <p>Developed by Your Name.</p>
+  <p>Developed by Bradley Buchsbaum.</p>
 </div>
 
 <div class="pkgdown-footer-right">
