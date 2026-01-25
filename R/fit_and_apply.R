@@ -18,7 +18,8 @@
 
 new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, pooling,
                             parcels = NULL, parcel_ids = NULL,
-                            phi_by_parcel = NULL, theta_by_parcel = NULL) {
+                            phi_by_parcel = NULL, theta_by_parcel = NULL,
+                            censor = NULL) {
   structure(
     list(
       phi = phi,
@@ -31,7 +32,8 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
       parcels = parcels,
       parcel_ids = parcel_ids,
       phi_by_parcel = phi_by_parcel,
-      theta_by_parcel = theta_by_parcel
+      theta_by_parcel = theta_by_parcel,
+      censor = censor
     ),
     class = "fmriAR_plan"
   )
@@ -117,6 +119,12 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 #' @param Y Optional data matrix used to compute residuals when `resid` is omitted.
 #' @param X Optional design matrix used with `Y` to compute residuals.
 #' @param runs Optional integer vector of run identifiers.
+#' @param censor Optional integer vector of 1-based timepoint indices to exclude from
+#'   AR parameter estimation, or a logical vector of length `nrow(resid)` where `TRUE`
+#'
+#'   indicates censored timepoints. Censored frames (e.g., motion-corrupted) are excluded
+#'   when computing autocorrelations. Each run's estimation uses only its own valid
+#'   (non-censored) segments.
 #' @param method Either "ar" or "arma".
 #' @param p AR order (integer or "auto" if method == "ar").
 #' @param q MA order (integer).
@@ -160,6 +168,7 @@ fit_noise <- function(resid = NULL,
                       Y = NULL,
                       X = NULL,
                       runs = NULL,
+                      censor = NULL,
                       method = c("ar", "arma"),
                       p = "auto",
                       q = 0L,
@@ -209,17 +218,92 @@ fit_noise <- function(resid = NULL,
 
   n <- nrow(resid)
   if (n < 10) stop("series too short")
+
+
+  # Normalize censor input: convert logical to integer indices
+  if (!is.null(censor)) {
+    if (is.logical(censor)) {
+      stopifnot(length(censor) == n)
+      censor <- which(censor)
+    }
+    censor <- sort(unique(as.integer(censor)))
+    censor <- censor[censor >= 1L & censor <= n]
+    if (!length(censor)) censor <- NULL
+  }
+
   Rsets <- if (is.null(runs)) list(seq_len(n)) else split(seq_len(n), as.integer(runs))
+
+  # Split censor indices by run (relative to run start)
+  censor_by_run <- lapply(Rsets, function(idx) integer(0L))
+  if (!is.null(censor)) {
+    for (ri in seq_along(Rsets)) {
+      idx <- Rsets[[ri]]
+      c_in <- intersect(censor, idx)
+      if (length(c_in)) {
+        censor_by_run[[ri]] <- as.integer(c_in - min(idx) + 1L)
+      }
+    }
+  }
+
   run_mats <- lapply(Rsets, function(idx) resid[idx, , drop = FALSE])
 
-  est_run <- function(mat) {
+  est_run <- function(mat, censor_rel = integer(0L)) {
+    # Get valid (non-censored) segments for estimation
+    # censor_rel contains 1-based indices within this run
+    n_run <- nrow(mat)
+    if (length(censor_rel)) {
+      # Create mask of valid timepoints
+      valid <- rep(TRUE, n_run)
+      valid[censor_rel] <- FALSE
+      valid_idx <- which(valid)
+    } else {
+      valid_idx <- seq_len(n_run)
+    }
+
     if (method == "ar") {
-      n_eff <- nrow(mat)
+      n_eff <- length(valid_idx)
       if (n_eff <= 1L) {
         return(list(phi = numeric(0), theta = numeric(0), order = c(p = 0L, q = 0L)))
       }
       p_cap <- min(as.integer(p_max), n_eff - 1L)
-      gamma <- .run_avg_acvf(mat, p_cap)
+
+      # Compute pooled ACVF from valid segments
+      # Segment the valid indices into contiguous runs
+      if (length(censor_rel) && n_eff > 0L) {
+        # Find segment boundaries (where consecutive indices are not adjacent)
+        diffs <- diff(valid_idx)
+        seg_breaks <- which(diffs > 1L)
+        seg_starts <- c(1L, seg_breaks + 1L)
+        seg_ends <- c(seg_breaks, length(valid_idx))
+
+        # Pool ACVF across segments
+        gamma_sum <- rep(0, p_cap + 1L)
+        total_contrib <- rep(0L, p_cap + 1L)
+        for (si in seq_along(seg_starts)) {
+          seg_idx <- valid_idx[seg_starts[si]:seg_ends[si]]
+          seg_len <- length(seg_idx)
+          if (seg_len > 1L) {
+            seg_mat <- mat[seg_idx, , drop = FALSE]
+            seg_pmax <- min(p_cap, seg_len - 1L)
+            seg_gamma <- .run_avg_acvf(seg_mat, seg_pmax)
+            # Weight by segment length for unbiased pooling
+            for (lag in seq_len(seg_pmax + 1L)) {
+              contrib <- seg_len - (lag - 1L)
+              gamma_sum[lag] <- gamma_sum[lag] + seg_gamma[lag] * contrib
+              total_contrib[lag] <- total_contrib[lag] + contrib
+            }
+          }
+        }
+        # Average across segments
+        gamma <- ifelse(total_contrib > 0L, gamma_sum / total_contrib, 0)
+        # Adjust p_cap if we don't have enough data for all lags
+        p_cap <- max(which(total_contrib > 0L)) - 1L
+        if (p_cap < 0L) p_cap <- 0L
+        gamma <- gamma[seq_len(p_cap + 1L)]
+      } else {
+        gamma <- .run_avg_acvf(mat[valid_idx, , drop = FALSE], p_cap)
+      }
+
       best_phi <- numeric(0)
       best_order <- c(p = 0L, q = 0L)
       n_eff_log <- log(n_eff)
@@ -240,7 +324,9 @@ fit_noise <- function(resid = NULL,
       }
       list(phi = best_phi, theta = numeric(0), order = best_order)
     } else {
-      y_mean <- rowMeans(mat)
+      # For ARMA: use valid timepoints only
+      mat_valid <- mat[valid_idx, , drop = FALSE]
+      y_mean <- rowMeans(mat_valid)
       pp <- if (identical(p, "auto")) min(2L, p_max) else as.integer(p)
       qq <- as.integer(q)
       hr_arma(y_mean, p = pp, q = qq, iter = as.integer(hr_iter), step1 = step1)
@@ -358,11 +444,12 @@ fit_noise <- function(resid = NULL,
       parcels = parcels,
       parcel_ids = parcel_ids,
       phi_by_parcel = phi_parcel,
-      theta_by_parcel = theta_parcel
+      theta_by_parcel = theta_parcel,
+      censor = censor
     ))
   }
 
-  estimates <- lapply(run_mats, est_run)
+  estimates <- mapply(est_run, run_mats, censor_by_run, SIMPLIFY = FALSE)
 
   if (pooling == "global") {
     lens <- vapply(Rsets, length, 0L)
@@ -395,7 +482,8 @@ fit_noise <- function(resid = NULL,
     runs = runs,
     exact_first = (exact_first == "ar1"),
     method = method,
-    pooling = pooling
+    pooling = pooling,
+    censor = censor
   )
 }
 
@@ -565,6 +653,6 @@ whiten_apply <- function(plan, X, Y, runs = NULL, run_starts = NULL, censor = NU
 #' @export
 whiten <- function(X, Y, runs = NULL, censor = NULL, ...) {
   res <- Y - X %*% qr.solve(X, Y)
-  plan <- fit_noise(resid = res, runs = runs, ...)
+  plan <- fit_noise(resid = res, runs = runs, censor = censor, ...)
   whiten_apply(plan, X, Y, runs = runs, censor = censor)
 }

@@ -9,6 +9,7 @@ fit_noise(
   Y = NULL,
   X = NULL,
   runs = NULL,
+  censor = NULL,
   method = c("ar", "arma"),
   p = "auto",
   q = 0L,
@@ -34,6 +35,13 @@ fit_noise(
 \item{X}{Optional design matrix used with \code{Y} to compute residuals.}
 
 \item{runs}{Optional integer vector of run identifiers.}
+
+\item{censor}{Optional integer vector of 1-based timepoint indices to exclude from
+AR parameter estimation, or a logical vector of length \code{nrow(resid)} where \code{TRUE}
+
+indicates censored timepoints. Censored frames (e.g., motion-corrupted) are excluded
+when computing autocorrelations. Each run's estimation uses only its own valid
+(non-censored) segments.}
 
 \item{method}{Either "ar" or "arma".}
 
