@@ -1,0 +1,16 @@
+# Package index
+
+## All functions
+
+- [`acorr_diagnostics()`](https://bbuchsbaum.github.io/fmriAR/reference/acorr_diagnostics.md)
+  : Autocorrelation diagnostics for residuals
+- [`fit_noise()`](https://bbuchsbaum.github.io/fmriAR/reference/fit_noise.md)
+  : Fit an AR/ARMA noise model (run-aware) and return a whitening plan
+- [`print(`*`<fmriAR_plan>`*`)`](https://bbuchsbaum.github.io/fmriAR/reference/print.fmriAR_plan.md)
+  : Pretty-print an fmriAR whitening plan
+- [`sandwich_from_whitened_resid()`](https://bbuchsbaum.github.io/fmriAR/reference/sandwich_from_whitened_resid.md)
+  : GLS standard errors from whitened residuals
+- [`whiten()`](https://bbuchsbaum.github.io/fmriAR/reference/whiten.md)
+  : Fit and apply whitening in one call
+- [`whiten_apply()`](https://bbuchsbaum.github.io/fmriAR/reference/whiten_apply.md)
+  : Apply a whitening plan to design and data matrices
