@@ -14,6 +14,7 @@ performance-critical computations.
 ### Build and Load
 
 ``` r
+
 # Compile C++ attributes
 Rcpp::compileAttributes()
 
@@ -27,6 +28,7 @@ devtools::load_all()
 ### Testing
 
 ``` r
+
 # Run all tests
 devtools::test()
 
@@ -37,6 +39,7 @@ testthat::test_file("tests/testthat/test-whitening.R")
 ### Package Check
 
 ``` r
+
 # Full R CMD check
 devtools::check()
 ```

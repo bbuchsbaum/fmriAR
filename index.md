@@ -17,6 +17,7 @@ confirm residual independence.
 ## Installation
 
 ``` r
+
 # install.packages("remotes")  # only needed once
 remotes::install_github("bbuchsbaum/fmriAR")
 library(fmriAR)
@@ -25,6 +26,7 @@ library(fmriAR)
 ## Quick start
 
 ``` r
+
 # X: design matrix (n x p), Y: voxel data (n x v), runs: factor or integer run labels
 res   <- Y - X %*% qr.solve(X, Y)                      # pre-fit residuals
 plan  <- fit_noise(res, runs = runs, method = "ar",    # estimate AR model

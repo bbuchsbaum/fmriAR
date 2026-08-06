@@ -32,9 +32,9 @@ plan <- fit_noise(resid, method = "ar", p = 2)
 print(plan)
 #> fmriAR whitening plan
 #>   Method: AR
-#>   Orders: p = 1, q = 0
+#>   Orders: p = 2, q = 0
 #>   Pooling: global
 #>   Exact first-sample scaling: AR(1)
 #>   Coefficients:
-#>     global: phi = -0.334
+#>     global: phi = 0.0183, -0.1920
 ```

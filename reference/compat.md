@@ -36,13 +36,6 @@ A list environment containing compatibility functions:
 # Create compatibility interface
 compat_funcs <- compat
 
-# AFNI-style restricted AR(3) plan from roots
-resid <- matrix(rnorm(120), 40, 3)
-runs <- rep(1:2, each = 20)
-roots <- list(a = 0.6, r1 = 0.7, t1 = pi / 6)
-plan_afni <- compat_funcs$afni_restricted_plan(resid, runs = runs, p = 3L,
-                                               roots = roots, estimate_ma1 = FALSE)
-
 # Example: Create whitening plan from AR coefficients
 phi <- c(0.3, 0.1)  # AR(2) coefficients
 plan <- compat_funcs$plan_from_phi(phi, exact_first = TRUE)

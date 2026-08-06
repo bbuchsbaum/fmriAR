@@ -23,6 +23,7 @@ dataset with two runs, a small design matrix, and voxel-specific AR(2)
 noise.
 
 ``` r
+
 library(fmriAR)
 set.seed(42)
 
@@ -70,6 +71,7 @@ When `method = "ar"` and `p = "auto"`, the function selects the AR order
 per run using BIC, then enforces stationarity.
 
 ``` r
+
 plan_ar <- fit_noise(
   resid,
   runs = runs,
@@ -102,6 +104,7 @@ takes the plan, design matrix, and observed data and returns whitened
 versions that can be used in GLS estimation or downstream analyses.
 
 ``` r
+
 whitened <- whiten_apply(plan_ar, X, Y, runs = runs)
 str(whitened)
 # List of 2
@@ -116,6 +119,7 @@ By default the function returns whitened `X` and `Y`. You can compute
 GLS coefficients with a single linear solve:
 
 ``` r
+
 Xw <- whitened$X
 Yw <- whitened$Y
 beta_gls <- qr.solve(Xw, Yw[, 1:5])
@@ -132,6 +136,7 @@ The helper below computes the average absolute autocorrelation across
 voxels.
 
 ``` r
+
 innov_var <- Yw - Xw %*% qr.solve(Xw, Yw)
 lag_stats <- apply(innov_var, 2, function(y) {
   ac <- acf(y, plot = FALSE, lag.max = 5)$acf[-1]
@@ -150,6 +155,7 @@ but the whitened summary should be markedly smaller than the raw
 baseline.
 
 ``` r
+
 lag_stats_raw <- apply(resid, 2, function(y) {
   ac <- acf(y, plot = FALSE, lag.max = 5)$acf[-1]
   mean(abs(ac))
@@ -159,6 +165,7 @@ mean(lag_stats_raw)
 ```
 
 ``` r
+
 avg_acf <- function(mat, lag.max = 20) {
   acf_vals <- sapply(seq_len(ncol(mat)), function(j) {
     stats::acf(mat[, j], plot = FALSE, lag.max = lag.max)$acf
@@ -205,6 +212,7 @@ or more homogeneous parcels lend more stability to their descendants
 while preserving stationarity for the final per-parcel filters.
 
 ``` r
+
 parcels_fine <- rep(1:12, each = n_vox / 12)
 parcels_medium <- rep(1:6, each = n_vox / 6)
 parcels_coarse <- rep(1:3, each = n_vox / 3)
@@ -227,27 +235,48 @@ plan_parcel <- fit_noise(
 
 plan_parcel$order
 # p q 
-# 6 0
+# 4 0
 ```
 
 When parcel pooling is requested,
 [`whiten_apply()`](https://bbuchsbaum.github.io/fmriAR/reference/whiten_apply.md)
 returns `X_by`, a list of whitened design matrices per parcel, along
-with the voxel-wise `Y` innovations.
+with the voxel-wise `Y` innovations. Each `X_by[[pid]]` has the same
+dimensions as the original `X`.
 
 ``` r
+
 whitened_parcel <- whiten_apply(plan_parcel, X, Y, runs = runs, parcels = parcels_fine)
 length(whitened_parcel$X_by)
 # [1] 12
+```
+
+Parcel coefficients differ from one another, which is the point of
+parcel pooling: each parcel gets a filter matched to its own noise.
+
+``` r
+
+# Per-parcel AR coefficients, and confirmation that whitening changed the data
+head(sapply(plan_parcel$phi_by_parcel, function(p) round(p, 3))[, 1:4])
+#           1      2      3      4
+# [1,]  0.472  0.472  0.485  0.471
+# [2,] -0.103 -0.114 -0.161 -0.166
+# [3,] -0.136 -0.108 -0.058 -0.057
+# [4,]  0.041  0.042  0.000  0.000
+max(abs(whitened_parcel$Y - Y))
+# [1] 2.138134
 ```
 
 ## Fitting ARMA models
 
 Some datasets require ARMA models to capture remaining MA structure. The
 workflow mirrors the AR case but sets `method = "arma"` and supplies
-orders `(p, q)`.
+orders `(p, q)`. Note: ARMA estimation uses a Hannan–Rissanen procedure
+on the run-mean residual series by default (fast and stable for
+planning), not voxel-wise ARMA fitting.
 
 ``` r
+
 plan_arma <- fit_noise(
   resid,
   runs = runs,
@@ -267,15 +296,45 @@ ARMA whitening uses the same
 interface.
 
 ``` r
+
 whitened_arma <- whiten_apply(plan_arma, X, Y, runs = runs)
-whitened_arma$X[1:5, ]
-#      intercept task
-# [1,] 1.0000000    0
-# [2,] 0.4657323    0
-# [3,] 0.5693939    0
-# [4,] 0.6397975    0
-# [5,] 0.6876133    0
+# The task regressor is 0 for the first 30 TRs in this simulation,
+# so showing the first 5 rows hides the effect on that column.
+# Instead, inspect rows around the first task onset (t = 31)
+# to see how the step regressor is filtered.
+whitened_arma$X[28:36, ]
+#       intercept      task
+#  [1,] 0.7888205 0.0000000
+#  [2,] 0.7888249 0.0000000
+#  [3,] 0.7888279 0.0000000
+#  [4,] 0.7888300 1.0000000
+#  [5,] 0.7888313 0.4657323
+#  [6,] 0.7888323 0.5693939
+#  [7,] 0.7888329 0.6397975
+#  [8,] 0.7888334 0.6876133
+#  [9,] 0.7888337 0.7200883
 ```
+
+``` r
+
+# Visualize how whitening transforms the task step regressor around its first onset
+task_raw <- X[, "task"]
+task_white <- whitened_arma$X[, "task"]
+onset <- which(task_raw > 0)[1]
+win <- max(1, onset - 10):min(n_time, onset + 30)
+ylim <- range(c(task_raw[win], task_white[win]))
+plot(win, task_raw[win], type = "s", lwd = 2, col = "#1b9e77",
+     ylim = ylim, xlab = "Time (TR)", ylab = "Regressor value",
+     main = "Task regressor: raw vs whitened (ARMA)")
+lines(win, task_white[win], lwd = 2, col = "#d95f02")
+legend("topleft", legend = c("Raw task", "Whitened task"),
+       col = c("#1b9e77", "#d95f02"), lwd = 2, bty = "n")
+```
+
+![Task regressor around onset: raw vs whitened
+(ARMA)](fmriAR-introduction_files/figure-html/arma-design-plot-1.png)
+
+Task regressor around onset: raw vs whitened (ARMA)
 
 ## AFNI-style restricted AR filters
 
@@ -284,7 +343,10 @@ AR roots with optional additive white noise—`fmriAR` exposes a stable
 wrapper via its compatibility interface: use
 `compat$afni_restricted_plan()` to construct matching whitening plans.
 This returns the same `fmriAR_plan` objects used elsewhere while keeping
-the main public API minimal.
+the main public API minimal. Alternatively, you can call the exported
+top-level helper
+[`afni_restricted_plan()`](https://bbuchsbaum.github.io/fmriAR/reference/afni_restricted_plan.md)
+directly; the compat wrapper delegates to it.
 
 The helper expects the AFNI root parameterisation (a real root `a`,
 complex pairs defined by radius/angle, and an optional MA(1) refinement)
@@ -293,6 +355,7 @@ AFNI’s internals, it is a convenient bridge when comparing pipelines or
 validating fmriAR against established AFNI analyses.
 
 ``` r
+
 # Example: AFNI-style AR(3) with optional MA(1) term
 roots <- list(a = 0.6, r1 = 0.7, t1 = pi / 6)
 
@@ -321,17 +384,18 @@ The package includes helpers for quick diagnostics and variance
 estimation:
 
 ``` r
-# Autocorrelation diagnostics for whitened residuals
-acorr <- acorr_diagnostics(Yw[, 1:3])
+
+# Autocorrelation diagnostics for whitened residuals (innovations)
+acorr <- acorr_diagnostics(innov_var[, 1:3])
 acorr
 # $lags
 #  [1]  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20
 # 
 # $acf
-#  [1]  0.392581599  0.360973704  0.310315389  0.322265370  0.374991747
-#  [6]  0.210502166  0.223249048  0.235552972  0.217492041  0.143651583
-# [11]  0.100407607  0.025318410  0.070841147  0.056705121  0.030469542
-# [16]  0.010908172  0.003657289 -0.015876436 -0.048598733 -0.084495619
+#  [1] -0.008413322 -0.049628810 -0.066414198 -0.004153683  0.112689339
+#  [6] -0.092193833 -0.026820366 -0.024139618  0.049228823 -0.044471239
+# [11] -0.054502513 -0.136842703 -0.032123766  0.003621034  0.004301947
+# [16] -0.021528673  0.074669753  0.030639151  0.018276696  0.040326782
 # 
 # $ci
 # [1] 0.1265175
@@ -348,8 +412,8 @@ sandwich$se
 
 - Explore the test suite in `tests/testthat` for additional usage
   patterns, including multiscale pooling and ARMA recovery checks.
-- Inspect the exported `fmriAR_plan` object with `plan_info()` to see
-  per-run or per-parcel coefficients.
+- Inspect the exported `fmriAR_plan` object with
+  `compat$plan_info(plan_ar)` to see per-run or per-parcel coefficients.
 - Combine
   [`whiten_apply()`](https://bbuchsbaum.github.io/fmriAR/reference/whiten_apply.md)
   with GLS modelling packages to build end-to-end prewhitened analyses.

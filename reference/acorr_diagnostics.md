@@ -21,7 +21,8 @@ acorr_diagnostics(
 
 - runs:
 
-  Optional run labels.
+  Optional run labels, length `nrow(resid)`. When supplied, each run is
+  centred separately and no lag product spans a run boundary.
 
 - max_lag:
 
@@ -51,6 +52,6 @@ for (v in 1:n_voxels) {
 # Check autocorrelation
 acorr_check <- acorr_diagnostics(resid, max_lag = 10, aggregate = "mean")
 
-# Examine lag-1 autocorrelation
-lag1_acorr <- acorr_check$acf[2]  # First element is lag-0 (always 1)
+# Examine lag-1 autocorrelation (lag 0 is not returned, so acf[1] is lag 1)
+lag1_acorr <- acorr_check$acf[1]
 ```

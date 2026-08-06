@@ -17,6 +17,7 @@ confirm residual independence.
 ## Installation
 
 ``` r
+
 # install.packages("remotes")  # only needed once
 remotes::install_github("bbuchsbaum/fmriAR")
 library(fmriAR)
@@ -25,6 +26,7 @@ library(fmriAR)
 ## Quick start
 
 ``` r
+
 # X: design matrix (n x p), Y: voxel data (n x v), runs: factor or integer run labels
 res   <- Y - X %*% qr.solve(X, Y)                      # pre-fit residuals
 plan  <- fit_noise(res, runs = runs, method = "ar",    # estimate AR model
@@ -51,6 +53,8 @@ whitening.
 
 - [`acorr_diagnostics()`](https://bbuchsbaum.github.io/fmriAR/reference/acorr_diagnostics.md)
   : Autocorrelation diagnostics for residuals
+- [`afni_restricted_plan()`](https://bbuchsbaum.github.io/fmriAR/reference/afni_restricted_plan.md)
+  : Build an AFNI-style restricted AR plan from root parameters
 - [`fit_noise()`](https://bbuchsbaum.github.io/fmriAR/reference/fit_noise.md)
   : Fit an AR/ARMA noise model (run-aware) and return a whitening plan
 - [`print(`*`<fmriAR_plan>`*`)`](https://bbuchsbaum.github.io/fmriAR/reference/print.fmriAR_plan.md)

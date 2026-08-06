@@ -7,8 +7,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 <title>Getting Started with fmriAR • fmriAR</title>
 <script src="../deps/jquery-3.6.0/jquery-3.6.0.min.js"></script><meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-<link href="../deps/bootstrap-5.3.1/bootstrap.min.css" rel="stylesheet">
-<script src="../deps/bootstrap-5.3.1/bootstrap.bundle.min.js"></script><link href="../deps/font-awesome-6.5.2/css/all.min.css" rel="stylesheet">
+<link href="../deps/bootstrap-5.3.8/bootstrap.min.css" rel="stylesheet">
+<script src="../deps/bootstrap-5.3.8/bootstrap.bundle.min.js"></script><link href="../deps/font-awesome-6.5.2/css/all.min.css" rel="stylesheet">
 <link href="../deps/font-awesome-6.5.2/css/v4-shims.min.css" rel="stylesheet">
 <script src="../deps/headroom-0.11.0/headroom.min.js"></script><script src="../deps/headroom-0.11.0/jQuery.headroom.min.js"></script><script src="../deps/bootstrap-toc-1.0.1/bootstrap-toc.min.js"></script><script src="../deps/clipboard.js-2.0.11/clipboard.min.js"></script><script src="../deps/search-1.0.0/autocomplete.jquery.min.js"></script><script src="../deps/search-1.0.0/fuse.min.js"></script><script src="../deps/search-1.0.0/mark.min.js"></script><!-- pkgdown --><script src="../pkgdown.js"></script><meta property="og:title" content="Getting Started with fmriAR">
 </head>
@@ -20,7 +20,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">fmriAR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.3.1</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.3.3</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -59,7 +59,7 @@
                         <h4 data-toc-skip class="author">fmriAR
 Team</h4>
             
-            <h4 data-toc-skip class="date">2026-01-25</h4>
+            <h4 data-toc-skip class="date">2026-08-06</h4>
       
 
       <div class="d-none name"><code>fmriAR-introduction.Rmd</code></div>
@@ -280,22 +280,38 @@ filters.</p>
 <span></span>
 <span><span class="va">plan_parcel</span><span class="op">$</span><span class="va">order</span></span>
 <span><span class="co"># p q </span></span>
-<span><span class="co"># 6 0</span></span></code></pre></div>
+<span><span class="co"># 4 0</span></span></code></pre></div>
 <p>When parcel pooling is requested, <code><a href="../reference/whiten_apply.html">whiten_apply()</a></code> returns
 <code>X_by</code>, a list of whitened design matrices per parcel, along
-with the voxel-wise <code>Y</code> innovations.</p>
+with the voxel-wise <code>Y</code> innovations. Each
+<code>X_by[[pid]]</code> has the same dimensions as the original
+<code>X</code>.</p>
 <div class="sourceCode" id="cb9"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">whitened_parcel</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/whiten_apply.html">whiten_apply</a></span><span class="op">(</span><span class="va">plan_parcel</span>, <span class="va">X</span>, <span class="va">Y</span>, runs <span class="op">=</span> <span class="va">runs</span>, parcels <span class="op">=</span> <span class="va">parcels_fine</span><span class="op">)</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/length.html" class="external-link">length</a></span><span class="op">(</span><span class="va">whitened_parcel</span><span class="op">$</span><span class="va">X_by</span><span class="op">)</span></span>
 <span><span class="co"># [1] 12</span></span></code></pre></div>
+<p>Parcel coefficients differ from one another, which is the point of
+parcel pooling: each parcel gets a filter matched to its own noise.</p>
+<div class="sourceCode" id="cb10"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="co"># Per-parcel AR coefficients, and confirmation that whitening changed the data</span></span>
+<span><span class="fu"><a href="https://rdrr.io/r/utils/head.html" class="external-link">head</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/lapply.html" class="external-link">sapply</a></span><span class="op">(</span><span class="va">plan_parcel</span><span class="op">$</span><span class="va">phi_by_parcel</span>, <span class="kw">function</span><span class="op">(</span><span class="va">p</span><span class="op">)</span> <span class="fu"><a href="https://rdrr.io/r/base/Round.html" class="external-link">round</a></span><span class="op">(</span><span class="va">p</span>, <span class="fl">3</span><span class="op">)</span><span class="op">)</span><span class="op">[</span>, <span class="fl">1</span><span class="op">:</span><span class="fl">4</span><span class="op">]</span><span class="op">)</span></span>
+<span><span class="co">#           1      2      3      4</span></span>
+<span><span class="co"># [1,]  0.472  0.472  0.485  0.471</span></span>
+<span><span class="co"># [2,] -0.103 -0.114 -0.161 -0.166</span></span>
+<span><span class="co"># [3,] -0.136 -0.108 -0.058 -0.057</span></span>
+<span><span class="co"># [4,]  0.041  0.042  0.000  0.000</span></span>
+<span><span class="fu"><a href="https://rdrr.io/r/base/Extremes.html" class="external-link">max</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/MathFun.html" class="external-link">abs</a></span><span class="op">(</span><span class="va">whitened_parcel</span><span class="op">$</span><span class="va">Y</span> <span class="op">-</span> <span class="va">Y</span><span class="op">)</span><span class="op">)</span></span>
+<span><span class="co"># [1] 2.138134</span></span></code></pre></div>
 </div>
 <div class="section level2">
 <h2 id="fitting-arma-models">Fitting ARMA models<a class="anchor" aria-label="anchor" href="#fitting-arma-models"></a>
 </h2>
 <p>Some datasets require ARMA models to capture remaining MA structure.
 The workflow mirrors the AR case but sets <code>method = "arma"</code>
-and supplies orders <code>(p, q)</code>.</p>
-<div class="sourceCode" id="cb10"><pre class="downlit sourceCode r">
+and supplies orders <code>(p, q)</code>. Note: ARMA estimation uses a
+Hannan–Rissanen procedure on the run-mean residual series by default
+(fast and stable for planning), not voxel-wise ARMA fitting.</p>
+<div class="sourceCode" id="cb11"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">plan_arma</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fit_noise.html">fit_noise</a></span><span class="op">(</span></span>
 <span>  <span class="va">resid</span>,</span>
 <span>  runs <span class="op">=</span> <span class="va">runs</span>,</span>
@@ -310,15 +326,41 @@ and supplies orders <code>(p, q)</code>.</p>
 <span><span class="co"># 2 1</span></span></code></pre></div>
 <p>ARMA whitening uses the same <code><a href="../reference/whiten_apply.html">whiten_apply()</a></code>
 interface.</p>
-<div class="sourceCode" id="cb11"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb12"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">whitened_arma</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/whiten_apply.html">whiten_apply</a></span><span class="op">(</span><span class="va">plan_arma</span>, <span class="va">X</span>, <span class="va">Y</span>, runs <span class="op">=</span> <span class="va">runs</span><span class="op">)</span></span>
-<span><span class="va">whitened_arma</span><span class="op">$</span><span class="va">X</span><span class="op">[</span><span class="fl">1</span><span class="op">:</span><span class="fl">5</span>, <span class="op">]</span></span>
-<span><span class="co">#      intercept task</span></span>
-<span><span class="co"># [1,] 1.0000000    0</span></span>
-<span><span class="co"># [2,] 0.4657323    0</span></span>
-<span><span class="co"># [3,] 0.5693939    0</span></span>
-<span><span class="co"># [4,] 0.6397975    0</span></span>
-<span><span class="co"># [5,] 0.6876133    0</span></span></code></pre></div>
+<span><span class="co"># The task regressor is 0 for the first 30 TRs in this simulation,</span></span>
+<span><span class="co"># so showing the first 5 rows hides the effect on that column.</span></span>
+<span><span class="co"># Instead, inspect rows around the first task onset (t = 31)</span></span>
+<span><span class="co"># to see how the step regressor is filtered.</span></span>
+<span><span class="va">whitened_arma</span><span class="op">$</span><span class="va">X</span><span class="op">[</span><span class="fl">28</span><span class="op">:</span><span class="fl">36</span>, <span class="op">]</span></span>
+<span><span class="co">#       intercept      task</span></span>
+<span><span class="co">#  [1,] 0.7888205 0.0000000</span></span>
+<span><span class="co">#  [2,] 0.7888249 0.0000000</span></span>
+<span><span class="co">#  [3,] 0.7888279 0.0000000</span></span>
+<span><span class="co">#  [4,] 0.7888300 1.0000000</span></span>
+<span><span class="co">#  [5,] 0.7888313 0.4657323</span></span>
+<span><span class="co">#  [6,] 0.7888323 0.5693939</span></span>
+<span><span class="co">#  [7,] 0.7888329 0.6397975</span></span>
+<span><span class="co">#  [8,] 0.7888334 0.6876133</span></span>
+<span><span class="co">#  [9,] 0.7888337 0.7200883</span></span></code></pre></div>
+<div class="sourceCode" id="cb13"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="co"># Visualize how whitening transforms the task step regressor around its first onset</span></span>
+<span><span class="va">task_raw</span> <span class="op">&lt;-</span> <span class="va">X</span><span class="op">[</span>, <span class="st">"task"</span><span class="op">]</span></span>
+<span><span class="va">task_white</span> <span class="op">&lt;-</span> <span class="va">whitened_arma</span><span class="op">$</span><span class="va">X</span><span class="op">[</span>, <span class="st">"task"</span><span class="op">]</span></span>
+<span><span class="va">onset</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/which.html" class="external-link">which</a></span><span class="op">(</span><span class="va">task_raw</span> <span class="op">&gt;</span> <span class="fl">0</span><span class="op">)</span><span class="op">[</span><span class="fl">1</span><span class="op">]</span></span>
+<span><span class="va">win</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/Extremes.html" class="external-link">max</a></span><span class="op">(</span><span class="fl">1</span>, <span class="va">onset</span> <span class="op">-</span> <span class="fl">10</span><span class="op">)</span><span class="op">:</span><span class="fu"><a href="https://rdrr.io/r/base/Extremes.html" class="external-link">min</a></span><span class="op">(</span><span class="va">n_time</span>, <span class="va">onset</span> <span class="op">+</span> <span class="fl">30</span><span class="op">)</span></span>
+<span><span class="va">ylim</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/range.html" class="external-link">range</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="va">task_raw</span><span class="op">[</span><span class="va">win</span><span class="op">]</span>, <span class="va">task_white</span><span class="op">[</span><span class="va">win</span><span class="op">]</span><span class="op">)</span><span class="op">)</span></span>
+<span><span class="fu"><a href="https://rdrr.io/r/graphics/plot.default.html" class="external-link">plot</a></span><span class="op">(</span><span class="va">win</span>, <span class="va">task_raw</span><span class="op">[</span><span class="va">win</span><span class="op">]</span>, type <span class="op">=</span> <span class="st">"s"</span>, lwd <span class="op">=</span> <span class="fl">2</span>, col <span class="op">=</span> <span class="st">"#1b9e77"</span>,</span>
+<span>     ylim <span class="op">=</span> <span class="va">ylim</span>, xlab <span class="op">=</span> <span class="st">"Time (TR)"</span>, ylab <span class="op">=</span> <span class="st">"Regressor value"</span>,</span>
+<span>     main <span class="op">=</span> <span class="st">"Task regressor: raw vs whitened (ARMA)"</span><span class="op">)</span></span>
+<span><span class="fu"><a href="https://rdrr.io/r/graphics/lines.html" class="external-link">lines</a></span><span class="op">(</span><span class="va">win</span>, <span class="va">task_white</span><span class="op">[</span><span class="va">win</span><span class="op">]</span>, lwd <span class="op">=</span> <span class="fl">2</span>, col <span class="op">=</span> <span class="st">"#d95f02"</span><span class="op">)</span></span>
+<span><span class="fu"><a href="https://rdrr.io/r/graphics/legend.html" class="external-link">legend</a></span><span class="op">(</span><span class="st">"topleft"</span>, legend <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"Raw task"</span>, <span class="st">"Whitened task"</span><span class="op">)</span>,</span>
+<span>       col <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"#1b9e77"</span>, <span class="st">"#d95f02"</span><span class="op">)</span>, lwd <span class="op">=</span> <span class="fl">2</span>, bty <span class="op">=</span> <span class="st">"n"</span><span class="op">)</span></span></code></pre></div>
+<div class="figure">
+<img src="fmriAR-introduction_files/figure-html/arma-design-plot-1.png" class="r-plt" alt="Task regressor around onset: raw vs whitened (ARMA)" width="672"><p class="caption">
+Task regressor around onset: raw vs whitened (ARMA)
+</p>
+</div>
 </div>
 <div class="section level2">
 <h2 id="afni-style-restricted-ar-filters">AFNI-style restricted AR filters<a class="anchor" aria-label="anchor" href="#afni-style-restricted-ar-filters"></a>
@@ -328,14 +370,17 @@ complex AR roots with optional additive white noise—<code>fmriAR</code>
 exposes a stable wrapper via its compatibility interface: use
 <code>compat$afni_restricted_plan()</code> to construct matching
 whitening plans. This returns the same <code>fmriAR_plan</code> objects
-used elsewhere while keeping the main public API minimal.</p>
+used elsewhere while keeping the main public API minimal. Alternatively,
+you can call the exported top-level helper
+<code><a href="../reference/afni_restricted_plan.html">afni_restricted_plan()</a></code> directly; the compat wrapper
+delegates to it.</p>
 <p>The helper expects the AFNI root parameterisation (a real root
 <code>a</code>, complex pairs defined by radius/angle, and an optional
 MA(1) refinement) and can operate globally or per parcel. Because the
 interface mirrors AFNI’s internals, it is a convenient bridge when
 comparing pipelines or validating fmriAR against established AFNI
 analyses.</p>
-<div class="sourceCode" id="cb12"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb14"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="co"># Example: AFNI-style AR(3) with optional MA(1) term</span></span>
 <span><span class="va">roots</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>a <span class="op">=</span> <span class="fl">0.6</span>, r1 <span class="op">=</span> <span class="fl">0.7</span>, t1 <span class="op">=</span> <span class="va">pi</span> <span class="op">/</span> <span class="fl">6</span><span class="op">)</span></span>
 <span></span>
@@ -362,18 +407,18 @@ mirror AFNI’s voxel grouping.</p>
 </h2>
 <p>The package includes helpers for quick diagnostics and variance
 estimation:</p>
-<div class="sourceCode" id="cb13"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="co"># Autocorrelation diagnostics for whitened residuals</span></span>
-<span><span class="va">acorr</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/acorr_diagnostics.html">acorr_diagnostics</a></span><span class="op">(</span><span class="va">Yw</span><span class="op">[</span>, <span class="fl">1</span><span class="op">:</span><span class="fl">3</span><span class="op">]</span><span class="op">)</span></span>
+<div class="sourceCode" id="cb15"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="co"># Autocorrelation diagnostics for whitened residuals (innovations)</span></span>
+<span><span class="va">acorr</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/acorr_diagnostics.html">acorr_diagnostics</a></span><span class="op">(</span><span class="va">innov_var</span><span class="op">[</span>, <span class="fl">1</span><span class="op">:</span><span class="fl">3</span><span class="op">]</span><span class="op">)</span></span>
 <span><span class="va">acorr</span></span>
 <span><span class="co"># $lags</span></span>
 <span><span class="co">#  [1]  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20</span></span>
 <span><span class="co"># </span></span>
 <span><span class="co"># $acf</span></span>
-<span><span class="co">#  [1]  0.392581599  0.360973704  0.310315389  0.322265370  0.374991747</span></span>
-<span><span class="co">#  [6]  0.210502166  0.223249048  0.235552972  0.217492041  0.143651583</span></span>
-<span><span class="co"># [11]  0.100407607  0.025318410  0.070841147  0.056705121  0.030469542</span></span>
-<span><span class="co"># [16]  0.010908172  0.003657289 -0.015876436 -0.048598733 -0.084495619</span></span>
+<span><span class="co">#  [1] -0.008413322 -0.049628810 -0.066414198 -0.004153683  0.112689339</span></span>
+<span><span class="co">#  [6] -0.092193833 -0.026820366 -0.024139618  0.049228823 -0.044471239</span></span>
+<span><span class="co"># [11] -0.054502513 -0.136842703 -0.032123766  0.003621034  0.004301947</span></span>
+<span><span class="co"># [16] -0.021528673  0.074669753  0.030639151  0.018276696  0.040326782</span></span>
 <span><span class="co"># </span></span>
 <span><span class="co"># $ci</span></span>
 <span><span class="co"># [1] 0.1265175</span></span>
@@ -393,7 +438,8 @@ estimation:</p>
 usage patterns, including multiscale pooling and ARMA recovery
 checks.</li>
 <li>Inspect the exported <code>fmriAR_plan</code> object with
-<code>plan_info()</code> to see per-run or per-parcel coefficients.</li>
+<code>compat$plan_info(plan_ar)</code> to see per-run or per-parcel
+coefficients.</li>
 <li>Combine <code><a href="../reference/whiten_apply.html">whiten_apply()</a></code> with GLS modelling packages to
 build end-to-end prewhitened analyses.</li>
 </ul>
@@ -412,7 +458,7 @@ thread control and censor handling.</p>
 </div>
 
 <div class="pkgdown-footer-right">
-  <p>Site built with <a href="https://pkgdown.r-lib.org/" class="external-link">pkgdown</a> 2.2.0.</p>
+  <p>Site built with <a href="https://pkgdown.r-lib.org/" class="external-link">pkgdown</a> 2.2.1.</p>
 </div>
 
     </footer>
