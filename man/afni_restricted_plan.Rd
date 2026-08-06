@@ -42,4 +42,3 @@ Build an AFNI-style restricted AR plan from root parameters
 \examples{
 NULL
 }
-\keyword{internal}

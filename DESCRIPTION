@@ -1,7 +1,7 @@
 Package: fmriAR
 Type: Package
 Title: Fast AR and ARMA Noise Whitening for Functional MRI (fMRI) Design and Data
-Version: 0.3.1
+Version: 0.3.2
 Authors@R: person("Bradley", "Buchsbaum", email = "brad.buchsbaum@gmail.com", role = c("aut","cre"))
 Author: Bradley Buchsbaum [aut, cre]
 Maintainer: Bradley Buchsbaum <brad.buchsbaum@gmail.com>

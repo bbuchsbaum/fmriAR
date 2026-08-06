@@ -58,7 +58,7 @@
 #' @return An `fmriAR_plan` with `method = "afni"` that can be supplied to
 #'   [whiten_apply()].
 #' @examples NULL
-#' @keywords internal
+#' @export
 afni_restricted_plan <- function(resid, runs = NULL, parcels = NULL,
                                  p = 3L, roots,
                                  estimate_ma1 = TRUE,

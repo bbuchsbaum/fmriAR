@@ -186,16 +186,23 @@ plan_parcel <- fit_noise(
 plan_parcel$order
 ```
 
-When parcel pooling is requested, `whiten_apply()` returns `X_by`, a list of whitened design matrices per parcel, along with the voxel-wise `Y` innovations.
+When parcel pooling is requested, `whiten_apply()` returns `X_by`, a list of whitened design matrices per parcel, along with the voxel-wise `Y` innovations. Each `X_by[[pid]]` has the same dimensions as the original `X`.
 
 ```{r whiten-parcel}
 whitened_parcel <- whiten_apply(plan_parcel, X, Y, runs = runs, parcels = parcels_fine)
 length(whitened_parcel$X_by)
 ```
 
+```{r whiten-parcel-check}
+# Confirm whitened design per parcel matches X dimensions
+dim(whitened_parcel$X_by[[1]])
+dim(X)
+```
+
 ## Fitting ARMA models
 
 Some datasets require ARMA models to capture remaining MA structure. The workflow mirrors the AR case but sets `method = "arma"` and supplies orders `(p, q)`.
+Note: ARMA estimation uses a Hannan–Rissanen procedure on the run-mean residual series by default (fast and stable for planning), not voxel-wise ARMA fitting.
 
 ```{r arma}
 plan_arma <- fit_noise(
@@ -214,12 +221,31 @@ ARMA whitening uses the same `whiten_apply()` interface.
 
 ```{r arma-whiten}
 whitened_arma <- whiten_apply(plan_arma, X, Y, runs = runs)
-whitened_arma$X[1:5, ]
+# The task regressor is 0 for the first 30 TRs in this simulation,
+# so showing the first 5 rows hides the effect on that column.
+# Instead, inspect rows around the first task onset (t = 31)
+# to see how the step regressor is filtered.
+whitened_arma$X[28:36, ]
+```
+
+```{r arma-design-plot, fig.cap = "Task regressor around onset: raw vs whitened (ARMA)"}
+# Visualize how whitening transforms the task step regressor around its first onset
+task_raw <- X[, "task"]
+task_white <- whitened_arma$X[, "task"]
+onset <- which(task_raw > 0)[1]
+win <- max(1, onset - 10):min(n_time, onset + 30)
+ylim <- range(c(task_raw[win], task_white[win]))
+plot(win, task_raw[win], type = "s", lwd = 2, col = "#1b9e77",
+     ylim = ylim, xlab = "Time (TR)", ylab = "Regressor value",
+     main = "Task regressor: raw vs whitened (ARMA)")
+lines(win, task_white[win], lwd = 2, col = "#d95f02")
+legend("topleft", legend = c("Raw task", "Whitened task"),
+       col = c("#1b9e77", "#d95f02"), lwd = 2, bty = "n")
 ```
 
 ## AFNI-style restricted AR filters
 
-If you need to replicate AFNI's "restricted ARMA" family—real + complex AR roots with optional additive white noise—`fmriAR` exposes a stable wrapper via its compatibility interface: use `compat$afni_restricted_plan()` to construct matching whitening plans. This returns the same `fmriAR_plan` objects used elsewhere while keeping the main public API minimal.
+If you need to replicate AFNI's "restricted ARMA" family—real + complex AR roots with optional additive white noise—`fmriAR` exposes a stable wrapper via its compatibility interface: use `compat$afni_restricted_plan()` to construct matching whitening plans. This returns the same `fmriAR_plan` objects used elsewhere while keeping the main public API minimal. Alternatively, you can call the exported top-level helper `afni_restricted_plan()` directly; the compat wrapper delegates to it.
 
 The helper expects the AFNI root parameterisation (a real root `a`, complex pairs defined by radius/angle, and an optional MA(1) refinement) and can operate globally or per parcel. Because the interface mirrors AFNI's internals, it is a convenient bridge when comparing pipelines or validating fmriAR against established AFNI analyses.
 
@@ -249,8 +275,8 @@ Tip: set `estimate_ma1 = FALSE` to obtain the pure AR filter implied by the AFNI
 The package includes helpers for quick diagnostics and variance estimation:
 
 ```{r diagnostics}
-# Autocorrelation diagnostics for whitened residuals
-acorr <- acorr_diagnostics(Yw[, 1:3])
+# Autocorrelation diagnostics for whitened residuals (innovations)
+acorr <- acorr_diagnostics(innov_var[, 1:3])
 acorr
 
 # Sandwich standard errors from whitened residuals
@@ -261,7 +287,7 @@ sandwich$se
 ## Next steps
 
 - Explore the test suite in `tests/testthat` for additional usage patterns, including multiscale pooling and ARMA recovery checks.
-- Inspect the exported `fmriAR_plan` object with `plan_info()` to see per-run or per-parcel coefficients.
+- Inspect the exported `fmriAR_plan` object with `compat$plan_info(plan_ar)` to see per-run or per-parcel coefficients.
 - Combine `whiten_apply()` with GLS modelling packages to build end-to-end prewhitened analyses.
 
 For production usage, consider benchmarking with your acquisition parameters and reviewing the package README for tuning options such as thread control and censor handling.

@@ -1,4 +1,4 @@
-# fmriAR 0.3.1
+# fmriAR 0.3.2
 
 * `fit_noise()` gains a `censor` parameter for motion scrubbing support. Censored
   timepoints (e.g., frames with high framewise displacement) are excluded from
@@ -11,6 +11,17 @@
 
 * The returned `fmriAR_plan` object now includes the `censor` indices for
   downstream reference.
+
+* Fixed a bug where `fit_noise(method = "ar", p = <integer>)` could ignore the
+  requested fixed AR order and still perform order selection, sometimes
+  returning a different order.
+
+* Fixed parcel-mode AR fitting so fixed-order requests only trigger multiscale
+  pooling when that mode is explicitly requested, preserving the expected
+  non-multiscale behavior by default.
+
+* Fixed the parcel `pacf_weighted` multiscale path for `p_target = 1`, where a
+  dimension drop could break coefficient averaging.
 
 # fmriAR 0.3.0
 

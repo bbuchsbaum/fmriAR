@@ -15,6 +15,8 @@
 ^enhancements\.md$
 ^LICENSE\.md$
 ^CRAN-SUBMISSION$
+^\.rcmdcheck_result\.rds$
 ^fmriAR_cheatsheet_v3.md
 ^doc$
 ^Meta$
+^\.vscode$

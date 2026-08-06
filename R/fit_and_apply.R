@@ -52,11 +52,28 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
   run_avg_acvf_cpp(mat, as.integer(max_lag))
 }
 
-.estimate_ar_series <- function(y, p_max) {
+.estimate_ar_series <- function(y, p_max, p = "auto") {
   y <- as.numeric(y)
   y_center <- y - mean(y)
+  p_cap <- min(as.integer(p_max), length(y_center) - 1L)
+
+  if (!identical(p, "auto")) {
+    pp <- min(as.integer(p), p_cap)
+    if (pp <= 0L) {
+      return(list(phi = numeric(0), order = c(p = 0L, q = 0L)))
+    }
+
+    acvf <- stats::acf(y_center, lag.max = pp, plot = FALSE, type = "covariance")$acf
+    gamma <- as.numeric(acvf)
+    R <- stats::toeplitz(gamma[1:pp])
+    r <- gamma[2:(pp + 1L)]
+    phi_try <- tryCatch(drop(solve(R, r)), error = function(e) rep(0, pp))
+    phi_try <- enforce_stationary_ar(phi_try, 0.99)
+    return(list(phi = phi_try, order = c(p = pp, q = 0L)))
+  }
+
   best <- list(score = Inf, phi = numeric(0), p = 0L)
-  for (pp in 0L:p_max) {
+  for (pp in 0L:p_cap) {
     if (pp == 0L) {
       e <- y_center
       ll <- -length(e) * log(stats::var(e))
@@ -205,6 +222,7 @@ fit_noise <- function(resid = NULL,
 
   ms_modes <- c("pacf_weighted", "acvf_pooled")
   multiscale_mode <- NULL
+  multiscale_explicit <- isTRUE(multiscale) || (!is.logical(multiscale) && length(multiscale) == 1L)
   if (is.logical(multiscale)) {
     if (isTRUE(multiscale)) {
       multiscale_mode <- if (is.null(ms_mode)) "pacf_weighted" else match.arg(ms_mode, ms_modes)
@@ -214,6 +232,9 @@ fit_noise <- function(resid = NULL,
   }
   if (!is.null(ms_mode) && (!is.logical(multiscale) || isTRUE(multiscale))) {
     multiscale_mode <- match.arg(ms_mode, ms_modes)
+  }
+  if (!multiscale_explicit && identical(pooling, "parcel") && !identical(p, "auto")) {
+    multiscale_mode <- NULL
   }
 
   n <- nrow(resid)
@@ -304,6 +325,16 @@ fit_noise <- function(resid = NULL,
         gamma <- .run_avg_acvf(mat[valid_idx, , drop = FALSE], p_cap)
       }
 
+      if (!identical(p, "auto")) {
+        pp <- min(as.integer(p), p_cap)
+        if (pp <= 0L) {
+          return(list(phi = numeric(0), theta = numeric(0), order = c(p = 0L, q = 0L)))
+        }
+        gamma_pp <- gamma[seq_len(pp + 1L)]
+        yw <- yw_from_acvf_fast(gamma_pp, pp)
+        return(list(phi = yw$phi, theta = numeric(0), order = c(p = pp, q = 0L)))
+      }
+
       best_phi <- numeric(0)
       best_order <- c(p = 0L, q = 0L)
       n_eff_log <- log(n_eff)
@@ -341,10 +372,20 @@ fit_noise <- function(resid = NULL,
 
     run_starts0 <- .full_run_starts(runs, censor = NULL, n = n)
 
-    estimator <- function(y) .estimate_ar_series(y, p_max)
+    estimator <- function(y) .estimate_ar_series(y, p_max, p = p)
     M_fine <- .parcel_means(resid, parcels)
 
-    target <- if (is.null(p_target)) p_max else min(as.integer(p_target), p_max)
+    target <- if (is.null(p_target)) {
+      if (identical(p, "auto")) {
+        p_max
+      } else if (multiscale_explicit) {
+        min(as.integer(p), p_max)
+      } else {
+        p_max
+      }
+    } else {
+      min(as.integer(p_target), p_max)
+    }
 
     if (is.null(parcel_sets)) {
       est_f <- .ms_estimate_scale(M_fine, estimator, run_starts0)
@@ -352,7 +393,8 @@ fit_noise <- function(resid = NULL,
         phi_parcel <- est_f$phi
       } else if (identical(multiscale_mode, "pacf_weighted")) {
         shrink <- 0.6
-        kap_mat <- vapply(est_f$phi, function(phi) .ms_pad(ar_to_pacf(phi), target), numeric(target))
+        kap_mat <- do.call(cbind, lapply(est_f$phi, function(phi) .ms_pad(ar_to_pacf(phi), target)))
+        if (!is.matrix(kap_mat)) kap_mat <- matrix(kap_mat, nrow = target)
         avg_kap <- if (target > 0L) rowMeans(kap_mat, na.rm = TRUE) else numeric(0)
         avg_kap <- pmin(pmax(avg_kap, -0.99), 0.99)
         phi_parcel <- lapply(est_f$phi, function(phi) {
