@@ -52,49 +52,167 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
   run_avg_acvf_cpp(mat, as.integer(max_lag))
 }
 
-.estimate_ar_series <- function(y, p_max, p = "auto") {
+# run_avg_acvf_cpp normalizes lag h by the pair count (n - h), the unbiased
+# estimator, which is not positive semi-definite. Rescaling each lag by
+# (n - h) / n converts it to the biased estimator, whose Toeplitz matrix is PSD
+# by construction. Yule-Walker on a non-PSD acvf can return explosive
+# coefficients, so every path that feeds yw_from_acvf_fast() must use this form.
+.run_avg_acvf_psd <- function(mat, max_lag) {
+  if (!is.matrix(mat)) mat <- as.matrix(mat)
+  max_lag <- as.integer(max_lag)
+  gamma <- run_avg_acvf_cpp(mat, max_lag)
+  n <- nrow(mat)
+  if (n <= 0L) return(gamma)
+  lags <- seq_along(gamma) - 1L
+  gamma * pmax(n - lags, 0) / n
+}
+
+# Pooled autocovariance over valid, possibly fragmented data.
+#
+# Two groupings, deliberately distinct:
+#
+#   center_id -- the unit the mean is estimated over. The mean is a per-run
+#     nuisance parameter (offsets and drift differ between runs), so it must be
+#     estimated per run, NOT per segment and NOT across runs. Centering each
+#     scrubbing fragment on its own mean removes the very signal being measured:
+#     a 2-frame fragment so centered has lag-1 product -(x1-x2)^2/4, negative by
+#     construction, so rho1 = -1 exactly. Pooling those drives phi toward and
+#     past zero as censoring rises, and is what makes the pooled acvf non-PSD.
+#     Centering across runs instead leaks between-run offsets into every lag and
+#     pushes rho toward 1.
+#
+#   seg_id -- the unit lag products are confined to, so no product spans a run
+#     boundary or a scrubbed frame.
+#
+# Returns per-lag product sums (averaged over columns) and their pair counts.
+.pooled_acvf_segments <- function(mat, seg_id, max_lag, center_id = NULL) {
+  if (!is.matrix(mat)) mat <- as.matrix(mat)
+  max_lag <- max(0L, as.integer(max_lag))
+  nv <- nrow(mat)
+  nc <- ncol(mat)
+  num <- numeric(max_lag + 1L)
+  pairs <- numeric(max_lag + 1L)
+  if (nv == 0L || nc == 0L) return(list(num = num, pairs = pairs))
+
+  if (is.null(center_id)) {
+    mat <- mat - rep(colMeans(mat), each = nv)
+  } else {
+    center_id <- as.integer(center_id)
+    grp <- match(center_id, sort(unique(center_id)))
+    mu <- rowsum(mat, grp, reorder = TRUE) / as.numeric(table(grp))
+    mat <- mat - mu[grp, , drop = FALSE]
+  }
+  num[1L] <- sum(mat * mat) / nc
+  pairs[1L] <- nv
+  for (lg in seq_len(max_lag)) {
+    if (nv <= lg) break
+    hi <- seq.int(lg + 1L, nv)
+    lo <- seq.int(1L, nv - lg)
+    ok <- seg_id[hi] == seg_id[lo]
+    if (!any(ok)) next
+    num[lg + 1L] <- sum(mat[hi[ok], , drop = FALSE] * mat[lo[ok], , drop = FALSE]) / nc
+    pairs[lg + 1L] <- sum(ok)
+  }
+  list(num = num, pairs = pairs)
+}
+
+.acvf_is_psd <- function(gamma, tol = 1e-10) {
+  if (length(gamma) < 2L) return(TRUE)
+  ev <- tryCatch(
+    eigen(stats::toeplitz(gamma), symmetric = TRUE, only.values = TRUE)$values,
+    error = function(e) NA_real_
+  )
+  if (anyNA(ev)) return(FALSE)
+  min(ev) >= -tol * max(1, abs(gamma[1]))
+}
+
+# Prefer the pair-count (unbiased) normalization, which is not attenuated when
+# censoring thins the pairs available at each lag. Fall back only as far toward
+# the PSD-safe common-divisor form as needed to make the Toeplitz matrix PSD,
+# since Yule-Walker on a non-PSD acvf returns explosive coefficients.
+.acvf_from_pooled <- function(pooled, tol = 1e-10) {
+  num <- pooled$num
+  pairs <- pooled$pairs
+  keep <- seq_len(max(1L, max(which(pairs > 0))))
+  num <- num[keep]
+  pairs <- pairs[keep]
+  if (!length(num) || pairs[1L] <= 0) return(numeric(0))
+
+  g_unb <- ifelse(pairs > 0, num / pairs, 0)
+  if (.acvf_is_psd(g_unb, tol)) return(g_unb)
+  g_psd <- num / pairs[1L]
+  lo <- 0
+  hi <- 1
+  for (i in seq_len(40L)) {
+    mid <- (lo + hi) / 2
+    if (.acvf_is_psd(mid * g_unb + (1 - mid) * g_psd, tol)) lo <- mid else hi <- mid
+  }
+  lo * g_unb + (1 - lo) * g_psd
+}
+
+# Indices of non-censored timepoints plus the 0-based starts of the contiguous
+# segments they form. A segment breaks at a run boundary or wherever censoring
+# removed a frame, so no lag product ever spans a discontinuity.
+.valid_segments <- function(n, runs = NULL, censor = NULL) {
+  n <- as.integer(n)
+  valid <- rep(TRUE, n)
+  if (!is.null(censor) && length(censor)) {
+    censor <- as.integer(censor)
+    censor <- censor[censor >= 1L & censor <= n]
+    valid[censor] <- FALSE
+  }
+  idx <- which(valid)
+  if (!length(idx)) {
+    return(list(idx = integer(0), starts0 = integer(0), run_id = integer(0)))
+  }
+  r <- if (is.null(runs)) rep(1L, n) else as.integer(runs)
+  brk <- c(TRUE, diff(idx) != 1L | r[idx[-1L]] != r[idx[-length(idx)]])
+  list(idx = idx, starts0 = as.integer(which(brk) - 1L), run_id = r[idx])
+}
+
+# Order selection and fitting for a single series, aware of the segment
+# structure it was drawn from. The autocovariance comes from segmented_acvf_cpp
+# (per-segment centering, PSD-safe normalization) and BIC scores the
+# Levinson-Durbin prediction error, matching the global/run path exactly.
+.estimate_ar_series <- function(y, p_max, p = "auto", starts0 = 0L, center_id = NULL) {
   y <- as.numeric(y)
-  y_center <- y - mean(y)
-  p_cap <- min(as.integer(p_max), length(y_center) - 1L)
+  n <- length(y)
+  starts0 <- as.integer(starts0)
+  if (!length(starts0)) starts0 <- 0L
+
+  seg_len <- diff(c(starts0, n))
+  p_cap <- min(as.integer(p_max), max(seg_len) - 1L, n - 1L)
+  if (p_cap < 1L) return(list(phi = numeric(0), order = c(p = 0L, q = 0L)))
+
+  seg_id <- cumsum(seq_len(n) %in% (starts0 + 1L))
+  gamma <- .acvf_from_pooled(
+    .pooled_acvf_segments(matrix(y, ncol = 1L), seg_id, p_cap, center_id = center_id)
+  )
+  if (!length(gamma) || !is.finite(gamma[1]) || gamma[1] <= 0) {
+    return(list(phi = numeric(0), order = c(p = 0L, q = 0L)))
+  }
+  p_cap <- min(p_cap, length(gamma) - 1L)
+  if (p_cap < 1L) return(list(phi = numeric(0), order = c(p = 0L, q = 0L)))
+
+  fit_order <- function(pp) {
+    yw <- yw_from_acvf_fast(gamma[seq_len(pp + 1L)], pp)
+    list(phi = enforce_stationary_ar(yw$phi, 0.99),
+         sigma2 = pmax(yw$sigma2, 1e-12))
+  }
 
   if (!identical(p, "auto")) {
     pp <- min(as.integer(p), p_cap)
-    if (pp <= 0L) {
-      return(list(phi = numeric(0), order = c(p = 0L, q = 0L)))
-    }
-
-    acvf <- stats::acf(y_center, lag.max = pp, plot = FALSE, type = "covariance")$acf
-    gamma <- as.numeric(acvf)
-    R <- stats::toeplitz(gamma[1:pp])
-    r <- gamma[2:(pp + 1L)]
-    phi_try <- tryCatch(drop(solve(R, r)), error = function(e) rep(0, pp))
-    phi_try <- enforce_stationary_ar(phi_try, 0.99)
-    return(list(phi = phi_try, order = c(p = pp, q = 0L)))
+    if (pp <= 0L) return(list(phi = numeric(0), order = c(p = 0L, q = 0L)))
+    return(list(phi = fit_order(pp)$phi, order = c(p = pp, q = 0L)))
   }
 
-  best <- list(score = Inf, phi = numeric(0), p = 0L)
-  for (pp in 0L:p_cap) {
-    if (pp == 0L) {
-      e <- y_center
-      ll <- -length(e) * log(stats::var(e))
-      k <- 1L
-      phi <- numeric(0)
-    } else {
-      acvf <- stats::acf(y_center, lag.max = pp, plot = FALSE, type = "covariance")$acf
-      gamma <- as.numeric(acvf)
-      R <- stats::toeplitz(gamma[1:pp])
-      r <- gamma[2:(pp + 1L)]
-      phi_try <- tryCatch(drop(solve(R, r)), error = function(e) rep(0, pp))
-      phi_try <- enforce_stationary_ar(phi_try, 0.99)
-      e <- stats::filter(y_center, c(1, -phi_try), method = "recursive")
-      e <- e[!is.na(e)]
-      ll <- -length(e) * log(mean(e^2))
-      k <- pp + 1L
-      phi <- phi_try
-    }
-    n0 <- length(y_center)
-    bic <- -2 * ll + k * log(n0)
-    if (bic < best$score) best <- list(score = bic, phi = if (pp > 0) phi else numeric(0), p = pp)
+  n_log <- log(n)
+  best <- list(bic = 2 * n * log(pmax(gamma[1], 1e-12)) + n_log,
+               phi = numeric(0), p = 0L)
+  for (pp in seq_len(p_cap)) {
+    f <- fit_order(pp)
+    bic <- 2 * n * log(f$sigma2) + (pp + 1L) * n_log
+    if (bic < best$bic) best <- list(bic = bic, phi = f$phi, p = pp)
   }
   list(phi = best$phi, order = c(p = best$p, q = 0L))
 }
@@ -288,41 +406,18 @@ fit_noise <- function(resid = NULL,
       }
       p_cap <- min(as.integer(p_max), n_eff - 1L)
 
-      # Compute pooled ACVF from valid segments
-      # Segment the valid indices into contiguous runs
-      if (length(censor_rel) && n_eff > 0L) {
-        # Find segment boundaries (where consecutive indices are not adjacent)
-        diffs <- diff(valid_idx)
-        seg_breaks <- which(diffs > 1L)
-        seg_starts <- c(1L, seg_breaks + 1L)
-        seg_ends <- c(seg_breaks, length(valid_idx))
-
-        # Pool ACVF across segments
-        gamma_sum <- rep(0, p_cap + 1L)
-        total_contrib <- rep(0L, p_cap + 1L)
-        for (si in seq_along(seg_starts)) {
-          seg_idx <- valid_idx[seg_starts[si]:seg_ends[si]]
-          seg_len <- length(seg_idx)
-          if (seg_len > 1L) {
-            seg_mat <- mat[seg_idx, , drop = FALSE]
-            seg_pmax <- min(p_cap, seg_len - 1L)
-            seg_gamma <- .run_avg_acvf(seg_mat, seg_pmax)
-            # Weight by segment length for unbiased pooling
-            for (lag in seq_len(seg_pmax + 1L)) {
-              contrib <- seg_len - (lag - 1L)
-              gamma_sum[lag] <- gamma_sum[lag] + seg_gamma[lag] * contrib
-              total_contrib[lag] <- total_contrib[lag] + contrib
-            }
-          }
-        }
-        # Average across segments
-        gamma <- ifelse(total_contrib > 0L, gamma_sum / total_contrib, 0)
-        # Adjust p_cap if we don't have enough data for all lags
-        p_cap <- max(which(total_contrib > 0L)) - 1L
-        if (p_cap < 0L) p_cap <- 0L
-        gamma <- gamma[seq_len(p_cap + 1L)]
-      } else {
-        gamma <- .run_avg_acvf(mat[valid_idx, , drop = FALSE], p_cap)
+      # Pool the autocovariance over the valid segments, centering once across
+      # all of this run's surviving frames.
+      seg_id <- cumsum(c(1L, as.integer(diff(valid_idx) > 1L)))
+      gamma <- .acvf_from_pooled(
+        .pooled_acvf_segments(mat[valid_idx, , drop = FALSE], seg_id, p_cap)
+      )
+      if (!length(gamma) || !is.finite(gamma[1]) || gamma[1] <= 0) {
+        return(list(phi = numeric(0), theta = numeric(0), order = c(p = 0L, q = 0L)))
+      }
+      p_cap <- min(p_cap, length(gamma) - 1L)
+      if (p_cap < 1L) {
+        return(list(phi = numeric(0), theta = numeric(0), order = c(p = 0L, q = 0L)))
       }
 
       if (!identical(p, "auto")) {
@@ -332,7 +427,8 @@ fit_noise <- function(resid = NULL,
         }
         gamma_pp <- gamma[seq_len(pp + 1L)]
         yw <- yw_from_acvf_fast(gamma_pp, pp)
-        return(list(phi = yw$phi, theta = numeric(0), order = c(p = pp, q = 0L)))
+        return(list(phi = enforce_stationary_ar(yw$phi, 0.99),
+                    theta = numeric(0), order = c(p = pp, q = 0L)))
       }
 
       best_phi <- numeric(0)
@@ -348,7 +444,7 @@ fit_noise <- function(resid = NULL,
           bic <- 2 * n_eff * log(sigma2) + (pp + 1L) * n_eff_log
           if (bic < best_bic) {
             best_bic <- bic
-            best_phi <- yw$phi
+            best_phi <- enforce_stationary_ar(yw$phi, 0.99)
             best_order <- c(p = pp, q = 0L)
           }
         }
@@ -370,10 +466,19 @@ fit_noise <- function(resid = NULL,
     parcels <- as.integer(parcels)
     stopifnot(length(parcels) == ncol(resid))
 
-    run_starts0 <- .full_run_starts(runs, censor = NULL, n = n)
+    # Drop censored frames and segment at both run boundaries and censoring
+    # gaps, so parcel estimation sees the same valid segment structure the
+    # global/run path uses. Passing censor = NULL here (as earlier versions
+    # did) silently estimated across scrubbed frames and run boundaries alike.
+    seg <- .valid_segments(n, runs = runs, censor = censor)
+    if (length(seg$idx) < 2L) stop("no valid timepoints remain after censoring")
+    run_starts0 <- seg$starts0
 
-    estimator <- function(y) .estimate_ar_series(y, p_max, p = p)
-    M_fine <- .parcel_means(resid, parcels)
+    estimator <- function(y, starts0 = run_starts0) {
+      .estimate_ar_series(y, p_max, p = p, starts0 = starts0,
+                          center_id = seg$run_id)
+    }
+    M_fine <- .parcel_means(resid, parcels)[seg$idx, , drop = FALSE]
 
     target <- if (is.null(p_target)) {
       if (identical(p, "auto")) {
@@ -388,7 +493,7 @@ fit_noise <- function(resid = NULL,
     }
 
     if (is.null(parcel_sets)) {
-      est_f <- .ms_estimate_scale(M_fine, estimator, run_starts0)
+      est_f <- .ms_estimate_scale(M_fine, estimator, run_starts0, lag_max = target)
       if (is.null(multiscale_mode) || target == 0L) {
         phi_parcel <- est_f$phi
       } else if (identical(multiscale_mode, "pacf_weighted")) {
@@ -425,9 +530,9 @@ fit_noise <- function(resid = NULL,
 
       M_coarse <- .parcel_means(resid, parcels_coarse)
       M_medium <- .parcel_means(resid, parcels_medium)
-      est_c <- .ms_estimate_scale(M_coarse, estimator, run_starts0)
-      est_m <- .ms_estimate_scale(M_medium, estimator, run_starts0)
-      est_f <- .ms_estimate_scale(M_fine, estimator, run_starts0)
+      est_c <- .ms_estimate_scale(M_coarse, estimator, run_starts0, lag_max = target)
+      est_m <- .ms_estimate_scale(M_medium, estimator, run_starts0, lag_max = target)
+      est_f <- .ms_estimate_scale(M_fine, estimator, run_starts0, lag_max = target)
 
       parents <- .ms_parent_maps(parcels_fine, parcels_medium, parcels_coarse)
       sizes <- list(
@@ -470,8 +575,21 @@ fit_noise <- function(resid = NULL,
       }, phi_parcel, est_f$acvf, SIMPLIFY = FALSE)
     }
 
+    # .ms_pad() zero-fills each parcel out to the pooling target, so the stored
+    # length reports padding rather than the order actually fitted -- an AR(2)
+    # fit with p_max = 6 would claim order 6. Trim the trailing zeros that every
+    # parcel shares and report the order that was really estimated.
+    eff <- vapply(phi_parcel, function(ph) {
+      nz <- which(ph != 0)
+      if (!length(nz)) 0L else max(nz)
+    }, 0L)
+    keep <- if (length(eff)) max(eff) else 0L
+    phi_parcel <- lapply(phi_parcel, function(ph) {
+      if (length(ph) >= keep) ph[seq_len(keep)] else c(ph, rep(0, keep - length(ph)))
+    })
+
     theta_parcel <- setNames(vector("list", length(phi_parcel)), names(phi_parcel))
-    order_vec <- c(p = max(vapply(phi_parcel, length, 0L)), q = 0L)
+    order_vec <- c(p = keep, q = 0L)
 
     parcel_ids <- names(phi_parcel)
     if (is.null(parcel_ids)) parcel_ids <- as.character(sort(unique(parcels)))
@@ -504,8 +622,16 @@ fit_noise <- function(resid = NULL,
       if (length(estimates[[i]]$theta)) Th[i, seq_along(estimates[[i]]$theta)] <- estimates[[i]]$theta
     }
     w <- lens / sum(lens)
-    phi_list <- list(as.numeric(drop(crossprod(w, Phi))))
-    theta_list <- list(as.numeric(drop(crossprod(w, Th))))
+    # Averaging per-run coefficient vectors does not preserve stationarity (or
+    # invertibility), and runs that selected a lower order are zero-padded to the
+    # longest before averaging, so the pooled vector need not be a valid AR of
+    # any run. Re-impose the constraints on the pooled result.
+    phi_pooled <- as.numeric(drop(crossprod(w, Phi)))
+    theta_pooled <- as.numeric(drop(crossprod(w, Th)))
+    if (length(phi_pooled)) phi_pooled <- enforce_stationary_ar(phi_pooled, 0.99)
+    if (length(theta_pooled)) theta_pooled <- enforce_invertible_ma(theta_pooled)
+    phi_list <- list(phi_pooled)
+    theta_list <- list(theta_pooled)
   } else {
     phi_list <- lapply(estimates, `[[`, "phi")
     theta_list <- lapply(estimates, `[[`, "theta")
@@ -604,7 +730,11 @@ whiten_apply <- function(plan, X, Y, runs = NULL, run_starts = NULL, censor = NU
       theta <- theta_by[[key]]
       if (is.null(theta)) theta <- numeric(0)
       Y_sub <- Y[, cols, drop = FALSE]
-      X_sub <- X_base
+      # arma_whiten_inplace() writes through its arguments. Assigning X_base
+      # without subsetting shares storage with the caller's X, so every parcel
+      # filtered the previous parcel's output, all X_by entries aliased one
+      # matrix, and the caller's design was silently overwritten.
+      X_sub <- X_base[seq_len(n), , drop = FALSE]
       out <- arma_whiten_inplace(
         Y = Y_sub,
         X = X_sub,

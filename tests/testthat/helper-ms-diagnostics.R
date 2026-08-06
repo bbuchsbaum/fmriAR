@@ -110,8 +110,22 @@ simulate_hier_ar2 <- function(h, n_train_per_run = 150L, n_test = 150L, runs_tra
   list(
     Y_train = Y_train, X_train = X_train, run_starts_train0 = rs_train0,
     Y_test = Y_test,   X_test  = X_test,  run_starts_test0  = rs_test0,
-    parcels_fine = h$parcels_fine
+    parcels_fine = h$parcels_fine,
+    phi_fine = phi_fine
   )
+}
+
+# RMSE of a plan's per-parcel coefficients against the per-parcel truth.
+parcel_phi_rmse <- function(plan, phi_true) {
+  est <- plan$phi_by_parcel
+  ids <- as.integer(names(est))
+  p <- nrow(phi_true)
+  err <- vapply(seq_along(ids), function(i) {
+    e <- est[[i]]
+    e <- c(e, rep(0, max(0L, p - length(e))))[seq_len(p)]
+    sum((e - phi_true[, ids[i]])^2)
+  }, numeric(1))
+  sqrt(mean(err) / p)
 }
 
 # Ljung-Box p-values and KS distance to Uniform(0,1)

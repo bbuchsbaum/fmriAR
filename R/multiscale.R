@@ -109,15 +109,19 @@
   parcel_means_fast(resid, parcels, na.rm = na.rm)
 }
 
-.ms_estimate_scale <- function(M, estimator, run_starts0 = NULL) {
+# `lag_max` must cover the pooling target, not just the order selected for this
+# scale. Sizing the acvf to the selected order alone leaves .ms_pad() zero-
+# filling the remaining lags, and Yule-Walker on a zero-filled autocovariance
+# returns explosive coefficients that only the stationarity clamp hides.
+.ms_estimate_scale <- function(M, estimator, run_starts0 = NULL, lag_max = 0L) {
   ids <- colnames(M)
   phi_by <- setNames(vector("list", length(ids)), ids)
   acvf_by <- setNames(vector("list", length(ids)), ids)
   for (id in ids) {
     fit <- estimator(M[, id])
     phi_by[[id]] <- fit$phi
-    lag_max <- max(0L, fit$order[["p"]] + 1L)
-    acvf_by[[id]] <- .segment_acvf(M[, id], run_starts0, lag_max)
+    lag_id <- max(as.integer(lag_max), fit$order[["p"]], 1L)
+    acvf_by[[id]] <- .segment_acvf(M[, id], run_starts0, lag_id)
   }
   list(phi = phi_by, acvf = acvf_by)
 }

@@ -193,10 +193,12 @@ whitened_parcel <- whiten_apply(plan_parcel, X, Y, runs = runs, parcels = parcel
 length(whitened_parcel$X_by)
 ```
 
+Parcel coefficients differ from one another, which is the point of parcel pooling: each parcel gets a filter matched to its own noise.
+
 ```{r whiten-parcel-check}
-# Confirm whitened design per parcel matches X dimensions
-dim(whitened_parcel$X_by[[1]])
-dim(X)
+# Per-parcel AR coefficients, and confirmation that whitening changed the data
+head(sapply(plan_parcel$phi_by_parcel, function(p) round(p, 3))[, 1:4])
+max(abs(whitened_parcel$Y - Y))
 ```
 
 ## Fitting ARMA models
