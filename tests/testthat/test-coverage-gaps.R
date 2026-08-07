@@ -394,3 +394,111 @@ test_that(".lag_matrix builds lagged design columns", {
   expect_equal(M[3, 2], 1)
   expect_true(all(is.na(M[1, ])))
 })
+
+test_that("print.fmriAR_plan covers remaining key-resolution branches", {
+  # phi_list NULL with non-null theta_list, and vice versa.
+  plan_th <- fmriAR:::new_whiten_plan(
+    phi = NULL,
+    theta = list(0.2, 0.1),
+    order = c(p = 0L, q = 1L),
+    runs = NULL,
+    exact_first = FALSE,
+    method = "arma",
+    pooling = "global"
+  )
+  txt <- paste(capture.output(print(plan_th)), collapse = "\n")
+  expect_match(txt, "theta =")
+
+  plan_ph <- fmriAR:::new_whiten_plan(
+    phi = list(0.3),
+    theta = NULL,
+    order = c(p = 1L, q = 0L),
+    runs = NULL,
+    exact_first = FALSE,
+    method = "ar",
+    pooling = "global"
+  )
+  expect_match(paste(capture.output(print(plan_ph)), collapse = "\n"), "phi =")
+
+  # Parcel ids inferred from names(phi_by) / parcels; align_lists lhs shorter.
+  phi_by <- list(a = 0.2, b = 0.1)  # named, no parcel_ids
+  plan_p <- fmriAR:::new_whiten_plan(
+    phi = NULL, theta = NULL,
+    order = c(p = 1L, q = 0L),
+    runs = NULL,
+    exact_first = FALSE,
+    method = "ar",
+    pooling = "parcel",
+    parcels = c(1L, 1L, 2L, 2L),
+    phi_by_parcel = phi_by,
+    theta_by_parcel = NULL
+  )
+  txt_p <- paste(capture.output(print(plan_p)), collapse = "\n")
+  expect_match(txt_p, "Parcel")
+
+  # Named parcel_ids with theta lookup by key; more theta than phi entries.
+  plan_align <- fmriAR:::new_whiten_plan(
+    phi = list(0.4),
+    theta = list(0.1, 0.2),
+    order = c(p = 1L, q = 1L),
+    runs = rep(1:2, each = 5),
+    exact_first = FALSE,
+    method = "arma",
+    pooling = "run"
+  )
+  expect_match(paste(capture.output(print(plan_align)), collapse = "\n"), "theta =")
+})
+
+test_that("hr_arma_fit_cpp covers white-noise and failure returns", {
+  set.seed(77)
+  y <- rnorm(40)
+  white <- fmriAR:::hr_arma_fit_cpp(y, p = 0L, q = 0L, p_big = 0L, iter = 0L)
+  expect_true(isTRUE(white$ok))
+  expect_length(white$phi, 0L)
+  expect_length(white$theta, 0L)
+  expect_true(is.finite(white$sigma2))
+
+  # Requested order too large for the series length -> ok = FALSE.
+  fail <- fmriAR:::hr_arma_fit_cpp(rnorm(12), p = 6L, q = 6L, p_big = 4L, iter = 0L)
+  expect_false(isTRUE(fail$ok))
+
+  # Explosive AR series encourages the C++ stationarity repair path.
+  n <- 80
+  ye <- numeric(n)
+  ye[1] <- 0.1
+  for (t in 2:n) ye[t] <- 1.2 * ye[t - 1] + rnorm(1, sd = 0.05)
+  est <- fmriAR:::hr_arma_fit_cpp(ye, p = 2L, q = 1L, p_big = 10L, iter = 1L)
+  if (isTRUE(est$ok) && length(est$phi)) {
+    expect_true(min(Mod(polyroot(c(1, -est$phi)))) > 1 - 1e-6)
+  }
+  if (isTRUE(est$ok) && length(est$theta)) {
+    expect_true(min(Mod(polyroot(c(1, est$theta)))) > 1 - 1e-6)
+  }
+})
+
+test_that("afni_restricted_plan broadcasts a single root spec across parcels", {
+  set.seed(88)
+  n <- 120
+  v <- 6
+  resid <- matrix(rnorm(n * v), n, v)
+  parcels <- rep(1:3, each = 2)
+  spec <- list(a = 0.5, r1 = 0.4, t1 = pi / 5)
+  plan <- afni_restricted_plan(resid, parcels = parcels, p = 3L, roots = spec,
+                               estimate_ma1 = FALSE)
+  expect_identical(plan$pooling, "parcel")
+  expect_equal(length(plan$phi_by_parcel), 3L)
+  expect_equal(plan$phi_by_parcel[[1]], fmriAR:::.afni_phi_ar3(spec$a, spec$r1, spec$t1))
+})
+
+test_that("fit_noise multiscale pacf_weighted path without parcel_sets runs", {
+  set.seed(99)
+  n <- 160
+  v <- 24
+  resid <- matrix(rnorm(n * v), n, v)
+  parcels <- rep(1:6, each = 4)
+  plan <- fit_noise(resid, pooling = "parcel", parcels = parcels,
+                    method = "ar", p = "auto", p_max = 3L,
+                    multiscale = TRUE, ms_mode = "pacf_weighted")
+  expect_identical(plan$pooling, "parcel")
+  expect_true(length(plan$phi_by_parcel) == 6L)
+})
