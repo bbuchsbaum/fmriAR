@@ -255,3 +255,15 @@ test_that("afni_restricted_plan validates inputs", {
     regexp = "not TRUE"
   )
 })
+
+test_that("run starts follow time order for any run labelling", {
+  # .afni_run_starts0 used split(, as.integer(runs)): character labels warned
+  # and collapsed into one NA group, and label-sorted order returned
+  # descending starts when runs were labelled out of time order.
+  expect_identical(fmriAR:::.afni_run_starts0(rep(c(2L, 1L), each = 5L), 10L),
+                   c(0L, 5L))
+  expect_identical(fmriAR:::.afni_run_starts0(rep(c("b", "a"), each = 5L), 10L),
+                   c(0L, 5L))
+  expect_error(fmriAR:::.afni_run_starts0(rep(c("a", "b", "a"), c(3L, 4L, 3L)), 10L),
+               "contiguous")
+})

@@ -11,13 +11,15 @@ noise_acvf(
   max_lag = 20L,
   pooling = c("global", "run", "parcel"),
   parcels = NULL,
-  design = NULL
+  design = NULL,
+  correction_max_lag = 25L
 )
 }
 \arguments{
 \item{resid}{Numeric matrix of residuals (timepoints x voxels).}
 
-\item{runs}{Optional run labels, length \code{nrow(resid)}.}
+\item{runs}{Optional run labels, length \code{nrow(resid)}. Each label must occupy
+one contiguous block and may not be missing.}
 
 \item{censor}{Optional indices of censored timepoints (1-based).}
 
@@ -31,6 +33,11 @@ one per run, \code{"parcel"} for one per parcel.}
 
 \item{design}{Optional design matrix whose projection produced \code{resid}. When
 supplied the residual bias is corrected; see \code{\link[=acvf_bias_matrix]{acvf_bias_matrix()}}.}
+
+\item{correction_max_lag}{Lag budget used to estimate and undo residual
+projection bias when \code{design} is supplied. This is independent of
+\code{max_lag}: correction needs enough tail information even when only a few
+output lags are requested.}
 }
 \value{
 An object of class \code{fmriAR_acvf}: a list with

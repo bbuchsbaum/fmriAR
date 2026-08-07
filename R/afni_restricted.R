@@ -34,13 +34,15 @@
   c(p1, p2, p3, p4, p5)
 }
 
-# local helper: 0-based run starts from integer run labels
+# local helper: 0-based run starts from run labels
 .afni_run_starts0 <- function(runs, n) {
   if (is.null(runs)) return(0L)
-  lab <- as.integer(runs)
-  idx <- split(seq_len(n), lab)
-  starts <- vapply(idx, function(ix) min(ix)-1L, 0L)  # 0-based
-  as.integer(starts)
+  # .run_codes renumbers labels 1..K in block order, so starts come back
+  # ascending-in-time even when labels are not ascending; the old
+  # split(, as.integer(runs)) returned them in label-sorted order and
+  # collapsed character labels to a single NA group.
+  codes <- .run_codes(runs, n)
+  as.integer(c(1L, which(diff(codes) != 0L) + 1L) - 1L)
 }
 
 #' Build an AFNI-style restricted AR plan from root parameters

@@ -1,5 +1,41 @@
 # Internal helpers -------------------------------------------------------------
 
+# Validate a lag budget and coerce it to integer. Clamping to n first keeps
+# as.integer() from overflowing to NA for absurd but finite requests; lags the
+# data cannot support are dropped downstream anyway.
+.lag_budget <- function(x, arg, at_least, n) {
+  if (length(x) != 1L || !is.finite(x) || x < at_least) {
+    stop("'", arg, "' must be one finite number >= ", at_least, call. = FALSE)
+  }
+  as.integer(min(x, n))
+}
+
+.run_codes <- function(runs, n, arg = "runs") {
+  n <- as.integer(n)
+  if (is.null(runs)) return(rep(1L, n))
+  if (length(runs) != n) {
+    stop("'", arg, "' has length ", length(runs),
+         " but must have one entry per timepoint (", n, ")", call. = FALSE)
+  }
+  if (anyNA(runs)) stop("'", arg, "' contains NA", call. = FALSE)
+
+  codes <- as.integer(match(runs, unique(runs)))
+  blocks <- rle(codes)$values
+  if (anyDuplicated(blocks)) {
+    stop("each '", arg, "' label must occupy one contiguous block", call. = FALSE)
+  }
+  codes
+}
+
+.run_sets <- function(runs, n, arg = "runs") {
+  codes <- .run_codes(runs, n, arg = arg)
+  if (is.null(runs)) return(list(seq_len(as.integer(n))))
+  out <- split(seq_len(as.integer(n)),
+               factor(codes, levels = seq_len(max(codes))))
+  names(out) <- as.character(unique(runs))
+  out
+}
+
 .sub_run_starts <- function(n_run, censor_idx_rel = integer()) {
   starts <- 1L
   if (length(censor_idx_rel)) {
@@ -152,11 +188,19 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 # censoring thins the pairs available at each lag. Where that is not positive
 # definite, shrink the non-zero lags toward white noise only as far as needed,
 # since Yule-Walker on a non-PD acvf returns explosive coefficients.
-.acvf_from_pooled <- function(pooled, order = NULL, tol = 1e-6, correction = NULL) {
+.acvf_from_pooled <- function(pooled, order = NULL, tol = 1e-6,
+                              correction = NULL, return_status = FALSE) {
+  finish <- function(acvf, corrected = FALSE) {
+    if (isTRUE(return_status)) {
+      list(acvf = acvf, corrected = corrected)
+    } else {
+      acvf
+    }
+  }
   num <- pooled$num
   pairs <- pooled$pairs
   usable <- which(pairs > 0)
-  if (!length(usable)) return(numeric(0))
+  if (!length(usable)) return(finish(numeric(0)))
   avail <- max(usable)
   # Correct only the Toeplitz matrix actually being inverted. Fragmented data
   # leaves few pairs at long lags, so those entries are noisy and frequently
@@ -164,10 +208,10 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
   # lags that carry the signal (phi = 0.95 came back as 0.85 at 40% censoring).
   keep <- if (is.null(order)) seq_len(max(1L, avail))
           else seq_len(max(1L, min(as.integer(order) + 1L, avail)))
-  if (pairs[1L] <= 0) return(numeric(0))
+  if (pairs[1L] <= 0) return(finish(numeric(0)))
 
   g_unb <- ifelse(pairs > 0, num / pairs, 0)[seq_len(avail)]
-  if (!is.finite(g_unb[1]) || g_unb[1] <= 0) return(numeric(0))
+  if (!is.finite(g_unb[1]) || g_unb[1] <= 0) return(finish(numeric(0)))
 
   # Undo the bias that the residual-forming projection puts into the raw
   # autocovariance, BEFORE truncating to the requested order. Correcting at the
@@ -175,12 +219,19 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
   # truncated vector: the correction at length L assumes gamma_k = 0 beyond L,
   # so a short L (order 1 gives L = 2) would throw away most of the information
   # that makes the correction work.
-  if (!is.null(correction)) g_unb <- .apply_acvf_correction(g_unb, correction)
-  if (!length(g_unb) || !is.finite(g_unb[1]) || g_unb[1] <= 0) return(numeric(0))
+  correction_applied <- FALSE
+  if (!is.null(correction)) {
+    corrected <- .apply_acvf_correction_result(g_unb, correction)
+    g_unb <- corrected$gamma
+    correction_applied <- corrected$applied
+  }
+  if (!length(g_unb) || !is.finite(g_unb[1]) || g_unb[1] <= 0) {
+    return(finish(numeric(0)))
+  }
 
   g_unb <- g_unb[keep[keep <= length(g_unb)]]
-  if (!length(g_unb)) return(numeric(0))
-  .shrink_to_pd(g_unb, tol)
+  if (!length(g_unb)) return(finish(numeric(0)))
+  finish(.shrink_to_pd(g_unb, tol), correction_applied)
 }
 
 # Shrink the non-zero lags toward white noise until the Toeplitz matrix is
@@ -209,17 +260,25 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 # straight through -- refuse on conditioning instead.
 .ACVF_RCOND_MIN <- 1e-6
 
-.apply_acvf_correction <- function(gamma, A) {
+.apply_acvf_correction_result <- function(gamma, A) {
   L <- min(length(gamma), nrow(A))
-  if (L < 1L) return(gamma)
+  if (L < 1L) return(list(gamma = gamma, applied = FALSE))
   Asub <- A[seq_len(L), seq_len(L), drop = FALSE]
   rc <- tryCatch(rcond(Asub), error = function(e) 0)
-  if (!is.finite(rc) || rc < .ACVF_RCOND_MIN) return(gamma)
+  if (!is.finite(rc) || rc < .ACVF_RCOND_MIN) {
+    return(list(gamma = gamma, applied = FALSE))
+  }
   out <- tryCatch(as.numeric(solve(Asub, gamma[seq_len(L)])),
                   error = function(e) NULL)
-  if (is.null(out) || !all(is.finite(out)) || out[1] <= 0) return(gamma)
+  if (is.null(out) || !all(is.finite(out)) || out[1] <= 0) {
+    return(list(gamma = gamma, applied = FALSE))
+  }
   if (length(gamma) > L) out <- c(out, gamma[(L + 1L):length(gamma)])
-  out
+  list(gamma = out, applied = TRUE)
+}
+
+.apply_acvf_correction <- function(gamma, A) {
+  .apply_acvf_correction_result(gamma, A)$gamma
 }
 
 # Conditioning is a property of the matrix, not of any one solve, so it is
@@ -285,7 +344,12 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 # whiten voxels with another parcel's coefficients. Making the caller convert
 # once, explicitly, keeps that coding visible and under their control.
 .parcel_codes <- function(x, arg = "parcels") {
+  if (anyNA(x)) stop("'", arg, "' contains NA", call. = FALSE)
   if (is.factor(x)) return(as.integer(x))
+  if (is.numeric(x) && any(!is.finite(x) | x != trunc(x))) {
+    stop("'", arg, "' must contain finite whole-number parcel labels",
+         call. = FALSE)
+  }
   codes <- suppressWarnings(as.integer(x))
   bad <- is.na(codes) & !is.na(x)
   if (any(bad)) {
@@ -304,6 +368,7 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 # removed a frame, so no lag product ever spans a discontinuity.
 .valid_segments <- function(n, runs = NULL, censor = NULL) {
   n <- as.integer(n)
+  r <- .run_codes(runs, n)
   valid <- rep(TRUE, n)
   if (!is.null(censor) && length(censor)) {
     censor <- as.integer(censor)
@@ -314,7 +379,6 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
   if (!length(idx)) {
     return(list(idx = integer(0), starts0 = integer(0), run_id = integer(0)))
   }
-  r <- if (is.null(runs)) rep(1L, n) else as.integer(runs)
   brk <- c(TRUE, diff(idx) != 1L | r[idx[-1L]] != r[idx[-length(idx)]])
   list(idx = idx, starts0 = as.integer(which(brk) - 1L), run_id = r[idx])
 }
@@ -426,7 +490,8 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 #' @param resid Numeric matrix (time x voxels) of residuals from an initial OLS fit.
 #' @param Y Optional data matrix used to compute residuals when `resid` is omitted.
 #' @param X Optional design matrix used with `Y` to compute residuals.
-#' @param runs Optional integer vector of run identifiers.
+#' @param runs Optional run labels, one per timepoint. Each label must occupy one
+#'   contiguous block and may not be missing.
 #' @param censor Optional integer vector of 1-based timepoint indices to exclude from
 #'   AR parameter estimation, or a logical vector of length `nrow(resid)` where `TRUE`
 #'
@@ -577,6 +642,7 @@ fit_noise <- function(resid = NULL,
 
   n <- nrow(resid)
   if (n < 10) stop("series too short")
+  if (any(!is.finite(resid))) stop("'resid' contains NA, NaN, or Inf")
 
 
   # Normalize censor input: convert logical to integer indices
@@ -590,7 +656,7 @@ fit_noise <- function(resid = NULL,
     if (!length(censor)) censor <- NULL
   }
 
-  Rsets <- if (is.null(runs)) list(seq_len(n)) else split(seq_len(n), as.integer(runs))
+  Rsets <- .run_sets(runs, n)
 
   # Split censor indices by run (relative to run start)
   censor_by_run <- lapply(Rsets, function(idx) integer(0L))
@@ -599,7 +665,7 @@ fit_noise <- function(resid = NULL,
       idx <- Rsets[[ri]]
       c_in <- intersect(censor, idx)
       if (length(c_in)) {
-        censor_by_run[[ri]] <- as.integer(c_in - min(idx) + 1L)
+        censor_by_run[[ri]] <- as.integer(match(c_in, idx))
       }
     }
   }
@@ -623,7 +689,8 @@ fit_noise <- function(resid = NULL,
     }
     corr_by_run <- if (!is.null(design)) {
       .acvf_bias_by_run(design, n, runs = runs, censor = censor,
-                        max_lag = max(1L, as.integer(correction_max_lag)))
+                        max_lag = .lag_budget(correction_max_lag,
+                                              "correction_max_lag", 1, n))
     } else {
       .normalize_correction(acvf_correction, length(Rsets))
     }
@@ -931,7 +998,13 @@ fit_noise <- function(resid = NULL,
   }
 
   if (pooling == "global") {
-    lens <- vapply(Rsets, length, 0L)
+    # Weight by observations that actually contributed. Using the original run
+    # lengths lets a heavily censored run carry the same influence as a complete
+    # one and disagrees with noise_acvf(), which pools by surviving frames.
+    lens <- vapply(seq_along(Rsets), function(i) {
+      length(Rsets[[i]]) - length(censor_by_run[[i]])
+    }, 0L)
+    if (sum(lens) <= 0) stop("no valid timepoints remain after censoring")
     pmax_len <- max(vapply(estimates, function(e) length(e$phi), 0L))
     qmax_len <- max(vapply(estimates, function(e) length(e$theta), 0L))
     Phi <- matrix(0, length(estimates), pmax_len)
@@ -958,11 +1031,16 @@ fit_noise <- function(resid = NULL,
     # has a negative eigenvalue. Averaging equal-length PD Toeplitz matrices is
     # PD by convexity; averaging zero-padded ones is not, and consumers building
     # Sigma from gamma got negative contrast variances.
+    # A run left with <= 1 surviving frame carries no autocovariance at all.
+    # It already contributes (near-)zero weight to phi, so exclude it here too,
+    # rather than letting its empty gamma truncate the pooled result to nothing.
     glens <- vapply(estimates, function(e) length(e$gamma %||% numeric(0)), 0L)
-    gmin <- if (length(glens)) min(glens) else 0L
-    gamma_list <- if (gmin > 0L) {
-      G <- do.call(rbind, lapply(estimates, function(e) e$gamma[seq_len(gmin)]))
-      list(as.numeric(drop(crossprod(w, G))))
+    has_g <- glens > 0L
+    gamma_list <- if (any(has_g)) {
+      gmin <- min(glens[has_g])
+      G <- do.call(rbind, lapply(estimates[has_g], function(e) e$gamma[seq_len(gmin)]))
+      wg <- lens[has_g] / sum(lens[has_g])
+      list(as.numeric(drop(crossprod(wg, G))))
     } else {
       list(numeric(0))
     }
@@ -1004,7 +1082,8 @@ fit_noise <- function(resid = NULL,
 #' @param plan Whitening plan from [fit_noise()].
 #' @param X Numeric matrix of predictors (time x regressors).
 #' @param Y Numeric matrix of data (time x voxels).
-#' @param runs Optional run labels.
+#' @param runs Optional run labels, one per row. Each label must occupy one
+#'   contiguous block and may not be missing.
 #' @param run_starts Optional 0-based run start indices (alternative to `runs`).
 #' @param censor Optional indices of censored TRs (1-based); filter resets after gaps.
 #' @param parcels Optional parcel labels (length = ncol(Y)) when using parcel plans.
@@ -1049,12 +1128,7 @@ whiten_apply <- function(plan, X, Y, runs = NULL, run_starts = NULL, censor = NU
 
   # Validate rather than let split() recycle or drop. A short `runs` was
   # silently recycled, and an NA left that row unwritten in both X and Y.
-  if (length(runs) != n) {
-    stop(sprintf("whiten_apply: 'runs' has length %d but X and Y have %d rows",
-                 length(runs), n))
-  }
-  if (anyNA(runs)) stop("whiten_apply: 'runs' contains NA")
-  runs <- if (is.numeric(runs)) as.integer(runs) else match(runs, unique(runs))
+  runs <- .run_codes(runs, n, arg = "runs")
 
   if (identical(plan$pooling, "parcel")) {
     parcels_vec <- plan$parcels

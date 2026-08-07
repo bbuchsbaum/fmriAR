@@ -15,7 +15,8 @@
 #' inspection, this returns covariances on the scale of the data.
 #'
 #' @param resid Numeric matrix of residuals (timepoints x voxels).
-#' @param runs Optional run labels, length `nrow(resid)`.
+#' @param runs Optional run labels, length `nrow(resid)`. Each label must occupy
+#'   one contiguous block and may not be missing.
 #' @param censor Optional indices of censored timepoints (1-based).
 #' @param max_lag Highest lag to return.
 #' @param pooling `"global"` for one autocovariance over all runs, `"run"` for
@@ -24,6 +25,10 @@
 #'   `pooling = "parcel"`.
 #' @param design Optional design matrix whose projection produced `resid`. When
 #'   supplied the residual bias is corrected; see [acvf_bias_matrix()].
+#' @param correction_max_lag Lag budget used to estimate and undo residual
+#'   projection bias when `design` is supplied. This is independent of
+#'   `max_lag`: correction needs enough tail information even when only a few
+#'   output lags are requested.
 #' @return An object of class `fmriAR_acvf`: a list with
 #'   \itemize{
 #'     \item `acvf`: named list of autocovariance vectors, lags 0 upward.
@@ -43,13 +48,14 @@
 #' @export
 noise_acvf <- function(resid, runs = NULL, censor = NULL, max_lag = 20L,
                        pooling = c("global", "run", "parcel"), parcels = NULL,
-                       design = NULL) {
+                       design = NULL, correction_max_lag = 25L) {
   pooling <- match.arg(pooling)
   if (!is.matrix(resid)) resid <- as.matrix(resid)
   storage.mode(resid) <- "double"
   n <- nrow(resid)
   if (n < 2L) stop("'resid' needs at least two timepoints")
-  max_lag <- max(0L, as.integer(max_lag))
+  max_lag <- .lag_budget(max_lag, "max_lag", 0, n)
+  if (any(!is.finite(resid))) stop("'resid' contains NA, NaN, or Inf")
 
   if (!is.null(censor)) {
     if (is.logical(censor)) {
@@ -61,14 +67,19 @@ noise_acvf <- function(resid, runs = NULL, censor = NULL, max_lag = 20L,
     if (!length(censor)) censor <- NULL
   }
 
-  corr_by_run <- if (is.null(design)) NULL else
+  corr_by_run <- if (is.null(design)) {
+    NULL
+  } else {
     .drop_unusable_corrections(
-      .acvf_bias_by_run(design, n, runs = runs, censor = censor, max_lag = max_lag))
+      .acvf_bias_by_run(design, n, runs = runs, censor = censor,
+                        max_lag = .lag_budget(correction_max_lag,
+                                              "correction_max_lag", 1, n)))
+  }
 
   # Units to estimate over. "run" and "global" split by run; "global" then
   # pools the per-run results the way fit_noise does.
-  Rsets <- if (is.null(runs)) list(`1` = seq_len(n)) else
-    split(seq_len(n), as.integer(runs))
+  Rsets <- .run_sets(runs, n)
+  if (is.null(runs)) names(Rsets) <- "1"
 
   if (pooling == "parcel") {
     if (is.null(parcels)) stop("'parcels' is required when pooling = 'parcel'")
@@ -83,11 +94,17 @@ noise_acvf <- function(resid, runs = NULL, censor = NULL, max_lag = 20L,
     keep <- if (is.null(censor)) idx else setdiff(idx, censor)
     if (length(keep) < 2L) return(NULL)
     seg_id <- cumsum(c(1L, as.integer(diff(keep) > 1L)))
-    pooled <- .pooled_acvf_segments(resid[keep, cols, drop = FALSE], seg_id, max_lag)
-    g <- .acvf_from_pooled(pooled, order = max_lag, correction = corr)
+    lag_budget <- if (is.null(corr)) max_lag else
+      max(max_lag, nrow(corr) - 1L)
+    pooled <- .pooled_acvf_segments(resid[keep, cols, drop = FALSE], seg_id,
+                                    lag_budget)
+    result <- .acvf_from_pooled(pooled, order = max_lag, correction = corr,
+                                return_status = TRUE)
+    g <- result$acvf
     if (!length(g)) return(NULL)
     list(acvf = g, pairs = pooled$pairs[seq_along(g)],
-         n_seg = max(seg_id), seg_len = as.integer(table(seg_id)))
+         n_seg = max(seg_id), seg_len = as.integer(table(seg_id)),
+         corrected = result$corrected)
   }
 
   all_cols <- seq_len(ncol(resid))
@@ -108,7 +125,8 @@ noise_acvf <- function(resid, runs = NULL, censor = NULL, max_lag = 20L,
       g <- .acvf_from_pooled(pooled, order = max_lag)
       if (!length(g)) return(NULL)
       list(acvf = g, pairs = pooled$pairs[seq_along(g)],
-           n_seg = max(seg_id), seg_len = as.integer(table(seg_id)))
+           n_seg = max(seg_id), seg_len = as.integer(table(seg_id)),
+           corrected = FALSE)
     }), as.character(ids))
   } else {
     units <- setNames(lapply(seq_along(Rsets), function(i) {
@@ -128,12 +146,17 @@ noise_acvf <- function(resid, runs = NULL, censor = NULL, max_lag = 20L,
     w <- w / sum(w)
     G <- do.call(rbind, lapply(units, function(u) u$acvf[seq_len(L)]))
     P <- do.call(rbind, lapply(units, function(u) u$pairs[seq_len(L)]))
+    all_corrected <- all(vapply(units, function(u) isTRUE(u$corrected), logical(1)))
     units <- list(`1` = list(acvf = as.numeric(drop(crossprod(w, G))),
                              pairs = colSums(P),
                              n_seg = sum(vapply(units, function(u) u$n_seg, 0L)),
                              seg_len = unlist(lapply(units, function(u) u$seg_len),
-                                              use.names = FALSE)))
+                                              use.names = FALSE),
+                             corrected = all_corrected))
   }
+  # A single surviving run under global pooling is already the pooled answer,
+  # but consumers still index the unit as "1", not by whatever the run label was.
+  if (pooling == "global") names(units) <- "1"
 
   structure(list(
     acvf = lapply(units, `[[`, "acvf"),
@@ -142,7 +165,7 @@ noise_acvf <- function(resid, runs = NULL, censor = NULL, max_lag = 20L,
     segment_lengths = lapply(units, `[[`, "seg_len"),
     max_lag = max_lag,
     pooling = pooling,
-    corrected = !is.null(design)
+    corrected = all(vapply(units, function(u) isTRUE(u$corrected), logical(1)))
   ), class = "fmriAR_acvf")
 }
 

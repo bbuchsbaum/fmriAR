@@ -34,8 +34,7 @@ acorr_diagnostics <- function(resid, runs = NULL, max_lag = 20L,
   # looked run-aware while lag products still spanned run boundaries.
   seg_id <- NULL
   if (!is.null(runs)) {
-    stopifnot(length(runs) == n)
-    seg_id <- match(as.integer(runs), unique(as.integer(runs)))
+    seg_id <- .run_codes(runs, n)
   }
 
   acf_one <- function(y) {

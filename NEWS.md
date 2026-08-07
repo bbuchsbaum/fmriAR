@@ -69,6 +69,48 @@ This release fixes several defects that silently produced wrong results rather
 than errors. Analyses run with `pooling = "parcel"` or with `censor` under 0.3.2
 should be rerun.
 
+* Global pooling now weights each run by the number of uncensored observations
+  that actually contributed. Previously `fit_noise()` weighted by the original
+  run length, so a nearly empty run could carry the same influence as a complete
+  run and disagree with `noise_acvf()`.
+
+* Run labels are validated and encoded consistently across fitting, ACVF
+  estimation, bias correction, whitening, `acorr_diagnostics()`, and
+  `afni_restricted_plan()`. Wrong-length vectors, missing labels, and labels
+  reused in non-contiguous blocks now fail at the boundary instead of
+  recycling or silently dropping timepoints; contiguous character labels are
+  supported. Previously `acorr_diagnostics()` coerced character labels to `NA`
+  and silently ignored the run split, and `afni_restricted_plan()` ordered its
+  run starts by sorted label rather than by time, so runs labelled out of
+  time order produced descending starts.
+
+* Under global pooling, a run censored down to one or zero surviving frames no
+  longer erases the pooled autocovariance. Such a run carries no `gamma` of
+  its own; it previously set the common truncation length to zero, so the plan
+  reported `gamma` of length 0 and `sigma2 = NA` for the whole fit even though
+  `phi` was pooled correctly and `noise_acvf()` returned the full answer.
+
+* `fit_noise()` rejects residuals containing `NA`, `NaN`, or `Inf`, matching
+  `noise_acvf()`. It previously returned an order-0 plan with empty
+  coefficients, which `whiten_apply()` accepted and applied as a no-op.
+
+* Lag budgets are validated the same way in `fit_noise()` and `noise_acvf()`:
+  both reject a non-finite or non-positive `correction_max_lag` (`fit_noise()`
+  used to clamp silently to 1), and budgets past the series length are clamped
+  to it rather than overflowing integer coercion into an unrelated error.
+
+* `noise_acvf()` under `pooling = "global"` keys its single pooled unit as
+  `"1"` even when only one run survives censoring; it previously leaked the
+  surviving run's label into the name.
+
+* `noise_acvf()` now has a separate `correction_max_lag` argument (default 25),
+  matching `fit_noise()`, so requesting a short output ACVF no longer weakens
+  residual-bias correction. Its `corrected` field now reports whether correction
+  was actually applied rather than whether a design was merely supplied.
+
+* Parcel labels containing `NA` or fractional numeric values now fail at the
+  boundary instead of dropping voxels or colliding after integer coercion.
+
 * Parcel labels that do not survive `as.integer()` are now refused at the
   boundary with a message naming the offending values. Character labels became
   `NA`, matched no voxel, and surfaced far downstream as `invalid K`, which
