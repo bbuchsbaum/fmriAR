@@ -16,7 +16,8 @@ noise_acvf(
   max_lag = 20L,
   pooling = c("global", "run", "parcel"),
   parcels = NULL,
-  design = NULL
+  design = NULL,
+  correction_max_lag = 25L
 )
 ```
 
@@ -28,7 +29,8 @@ noise_acvf(
 
 - runs:
 
-  Optional run labels, length `nrow(resid)`.
+  Optional run labels, length `nrow(resid)`. Each label must occupy one
+  contiguous block and may not be missing.
 
 - censor:
 
@@ -53,6 +55,13 @@ noise_acvf(
   Optional design matrix whose projection produced `resid`. When
   supplied the residual bias is corrected; see
   [`acvf_bias_matrix()`](https://bbuchsbaum.github.io/fmriAR/reference/acvf_bias_matrix.md).
+
+- correction_max_lag:
+
+  Lag budget used to estimate and undo residual projection bias when
+  `design` is supplied. This is independent of `max_lag`: correction
+  needs enough tail information even when only a few output lags are
+  requested.
 
 ## Value
 

@@ -58,7 +58,8 @@ does not have its autocorrelation destroyed by the centering.</p>
 <span>  max_lag <span class="op">=</span> <span class="fl">20L</span>,</span>
 <span>  pooling <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"global"</span>, <span class="st">"run"</span>, <span class="st">"parcel"</span><span class="op">)</span>,</span>
 <span>  parcels <span class="op">=</span> <span class="cn">NULL</span>,</span>
-<span>  design <span class="op">=</span> <span class="cn">NULL</span></span>
+<span>  design <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  correction_max_lag <span class="op">=</span> <span class="fl">25L</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -71,7 +72,8 @@ does not have its autocorrelation destroyed by the centering.</p>
 
 
 <dt id="arg-runs">runs<a class="anchor" aria-label="anchor" href="#arg-runs"></a></dt>
-<dd><p>Optional run labels, length <code>nrow(resid)</code>.</p></dd>
+<dd><p>Optional run labels, length <code>nrow(resid)</code>. Each label must occupy
+one contiguous block and may not be missing.</p></dd>
 
 
 <dt id="arg-censor">censor<a class="anchor" aria-label="anchor" href="#arg-censor"></a></dt>
@@ -95,6 +97,13 @@ one per run, <code>"parcel"</code> for one per parcel.</p></dd>
 <dt id="arg-design">design<a class="anchor" aria-label="anchor" href="#arg-design"></a></dt>
 <dd><p>Optional design matrix whose projection produced <code>resid</code>. When
 supplied the residual bias is corrected; see <code><a href="acvf_bias_matrix.html">acvf_bias_matrix()</a></code>.</p></dd>
+
+
+<dt id="arg-correction-max-lag">correction_max_lag<a class="anchor" aria-label="anchor" href="#arg-correction-max-lag"></a></dt>
+<dd><p>Lag budget used to estimate and undo residual
+projection bias when <code>design</code> is supplied. This is independent of
+<code>max_lag</code>: correction needs enough tail information even when only a few
+output lags are requested.</p></dd>
 
 </dl></div>
     <div class="section level2">

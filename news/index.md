@@ -82,6 +82,31 @@ This release fixes several defects that silently produced wrong results
 rather than errors. Analyses run with `pooling = "parcel"` or with
 `censor` under 0.3.2 should be rerun.
 
+- Global pooling now weights each run by the number of uncensored
+  observations that actually contributed. Previously
+  [`fit_noise()`](https://bbuchsbaum.github.io/fmriAR/reference/fit_noise.md)
+  weighted by the original run length, so a nearly empty run could carry
+  the same influence as a complete run and disagree with
+  [`noise_acvf()`](https://bbuchsbaum.github.io/fmriAR/reference/noise_acvf.md).
+
+- Run labels are validated and encoded consistently across fitting, ACVF
+  estimation, bias correction, and whitening. Wrong-length vectors,
+  missing labels, and labels reused in non-contiguous blocks now fail at
+  the boundary instead of recycling or silently dropping timepoints;
+  contiguous character labels are supported.
+
+- [`noise_acvf()`](https://bbuchsbaum.github.io/fmriAR/reference/noise_acvf.md)
+  now has a separate `correction_max_lag` argument (default 25),
+  matching
+  [`fit_noise()`](https://bbuchsbaum.github.io/fmriAR/reference/fit_noise.md),
+  so requesting a short output ACVF no longer weakens residual-bias
+  correction. Its `corrected` field now reports whether correction was
+  actually applied rather than whether a design was merely supplied.
+
+- Parcel labels containing `NA` or fractional numeric values now fail at
+  the boundary instead of dropping voxels or colliding after integer
+  coercion.
+
 - Parcel labels that do not survive
   [`as.integer()`](https://rdrr.io/r/base/integer.html) are now refused
   at the boundary with a message naming the offending values. Character

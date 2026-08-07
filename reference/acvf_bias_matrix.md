@@ -9,7 +9,7 @@ because `E[ehat ehat'] = M Sigma M` for the residual-forming projection
 ## Usage
 
 ``` r
-acvf_bias_matrix(design, runs = NULL, censor = NULL, max_lag = 20L)
+acvf_bias_matrix(design, runs = NULL, censor = NULL, max_lag = 25L)
 ```
 
 ## Arguments
@@ -21,7 +21,8 @@ acvf_bias_matrix(design, runs = NULL, censor = NULL, max_lag = 20L)
 
 - runs:
 
-  Optional run labels, length `nrow(design)`. Lag products never cross a
+  Optional run labels, length `nrow(design)`. Each label must occupy one
+  contiguous block and may not be missing. Lag products never cross a
   run boundary.
 
 - censor:

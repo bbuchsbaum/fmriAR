@@ -35,7 +35,8 @@ whiten_apply(
 
 - runs:
 
-  Optional run labels.
+  Optional run labels, one per row. Each label must occupy one
+  contiguous block and may not be missing.
 
 - run_starts:
 

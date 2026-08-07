@@ -49,7 +49,8 @@ fit_noise(
 
 - runs:
 
-  Optional integer vector of run identifiers.
+  Optional run labels, one per timepoint. Each label must occupy one
+  contiguous block and may not be missing.
 
 - censor:
 
