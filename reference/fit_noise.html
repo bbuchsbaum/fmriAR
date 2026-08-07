@@ -171,7 +171,10 @@ covariance.</p></li>
 as <code>gamma_0 - sum_k phi_k gamma_k</code> from the coefficients stored on the
 plan so the two are always mutually consistent. <code>NA</code> for
 <code>method = "arma"</code>, where no comparably cheap voxel-scale innovation
-variance is available.</p></li>
+variance is available, and <code>NA</code> whenever <code>gamma</code> does not reach lag
+<code>length(phi)</code> – heavy censoring can truncate it that far, and a
+partial sum would overstate the innovation variance rather than
+report that it is unavailable.</p></li>
 <li><p><code>gamma_by_parcel</code>, <code>sigma2_by_parcel</code>: the same quantities per
 parcel when <code>pooling = "parcel"</code>, keyed like <code>phi_by_parcel</code>.</p></li>
 </ul><p>For a run-stationary noise process with autocovariance <code>gamma</code>, the

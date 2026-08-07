@@ -17,19 +17,42 @@
   runs that reached different lags are truncated to the shortest before
   averaging rather than zero-padded: a zero-padded autocovariance is not
   a valid covariance, and building `Sigma` from one could yield negative
-  contrast variances. The addition is purely additive; existing fields
-  are unchanged. For `method = "arma"`, `gamma` is the voxel-scale noise
-  autocovariance pooled the same way as for AR, and `sigma2` is `NA`:
-  Hannan-Rissanen’s own innovation variance is that of the run-mean
-  series, smaller than the per-voxel value by roughly the number of
-  voxels averaged, so reporting it would understate the noise by that
-  factor.
+  contrast variances. Truncation can leave `gamma` shorter than
+  `length(phi)` when censoring is heavy, and `sigma2` is then `NA`
+  rather than a partial sum, which would overstate the innovation
+  variance. The condition does not arise below roughly 25% censoring.
+  The addition is purely additive; existing fields are unchanged. For
+  `method = "arma"`, `gamma` is the voxel-scale noise autocovariance
+  pooled the same way as for AR, and `sigma2` is `NA`: Hannan-Rissanen’s
+  own innovation variance is that of the run-mean series, smaller than
+  the per-voxel value by roughly the number of voxels averaged, so
+  reporting it would understate the noise by that factor.
 
 ### Fixes
 
 This release fixes several defects that silently produced wrong results
 rather than errors. Analyses run with `pooling = "parcel"` or with
 `censor` under 0.3.2 should be rerun.
+
+- Parcel labels that do not survive
+  [`as.integer()`](https://rdrr.io/r/base/integer.html) are now refused
+  at the boundary with a message naming the offending values. Character
+  labels became `NA`, matched no voxel, and surfaced far downstream as
+  `invalid K`, which names nothing the caller passed. The check covers
+  every exported entry point that accepts parcels:
+  [`fit_noise()`](https://bbuchsbaum.github.io/fmriAR/reference/fit_noise.md)
+  (including `parcel_sets`),
+  [`whiten_apply()`](https://bbuchsbaum.github.io/fmriAR/reference/whiten_apply.md),
+  [`afni_restricted_plan()`](https://bbuchsbaum.github.io/fmriAR/reference/afni_restricted_plan.md),
+  and `compat$plan_from_phi()`. Integer, numeric, and factor labels are
+  unaffected. Character labels are refused rather than mapped to codes
+  the way `runs` are, because
+  [`fit_noise()`](https://bbuchsbaum.github.io/fmriAR/reference/fit_noise.md)
+  and
+  [`whiten_apply()`](https://bbuchsbaum.github.io/fmriAR/reference/whiten_apply.md)
+  would each have to derive the same mapping from their own copy of the
+  vector and nothing on the plan records it; convert once with
+  `as.integer(factor(parcels))` and reuse that coding.
 
 - Fixed order selection for `pooling = "parcel"`. The innovation
   sequence used to score BIC was built with a feedback filter rather

@@ -142,7 +142,10 @@ implies rather than only its correlation structure:
   `gamma_0 - sum_k phi_k gamma_k` from the coefficients stored on the
   plan so the two are always mutually consistent. `NA` for
   `method = "arma"`, where no comparably cheap voxel-scale innovation
-  variance is available.
+  variance is available, and `NA` whenever `gamma` does not reach lag
+  `length(phi)` – heavy censoring can truncate it that far, and a
+  partial sum would overstate the innovation variance rather than report
+  that it is unavailable.
 
 - `gamma_by_parcel`, `sigma2_by_parcel`: the same quantities per parcel
   when `pooling = "parcel"`, keyed like `phi_by_parcel`.
