@@ -51,7 +51,7 @@ compat_env <- local({
     }
 
     stopifnot(!is.null(parcels))
-    parcels <- as.integer(parcels)
+    parcels <- .parcel_codes(parcels)
 
     if (pooling == "parcel") {
       stopifnot(is.list(phi))

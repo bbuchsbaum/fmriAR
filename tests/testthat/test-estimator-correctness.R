@@ -841,6 +841,71 @@ test_that("sigma2 is consistent with the coefficients stored on the plan", {
   }
 })
 
+test_that("uncoercible parcel labels are refused at the boundary", {
+  # as.integer("A") is NA, which then matches no voxel, and the failure used to
+  # surface from deep inside the estimator as "invalid K" -- a message naming
+  # nothing the caller passed.
+  A <- ar_sim(200L, 0.5, nvox = 16L, seed = 8123)
+  chr <- rep(c("A", "B", "C", "D"), length.out = 16L)
+
+  expect_error(
+    fmriAR::fit_noise(A, parcels = chr, pooling = "parcel", method = "ar", p = 2L),
+    "must be integer, numeric, or factor labels"
+  )
+  # The message must name the offending values and the way out.
+  err <- tryCatch(
+    fmriAR::fit_noise(A, parcels = chr, pooling = "parcel", method = "ar", p = 2L),
+    error = conditionMessage)
+  expect_match(err, "'A'")
+  expect_match(err, "as.integer(factor(parcels))", fixed = TRUE)
+  expect_false(grepl("invalid K", err, fixed = TRUE))
+
+  # Every other exported entry point that takes parcels refuses them too.
+  expect_error(
+    fmriAR::fit_noise(A, parcels = rep(1:4, length.out = 16L), pooling = "parcel",
+                      method = "ar", p = 2L, p_target = 2L,
+                      parcel_sets = list(coarse = rep(c("x", "y"), length.out = 16L),
+                                         medium = rep(1:3, length.out = 16L),
+                                         fine = rep(1:4, length.out = 16L))),
+    "parcel_sets\\$coarse"
+  )
+  expect_error(
+    fmriAR::afni_restricted_plan(resid = A, runs = NULL, parcels = chr, p = 3L,
+                                 roots = list(a = 0.3, r1 = 0.4, t1 = 0.2),
+                                 estimate_ma1 = FALSE),
+    "must be integer, numeric, or factor labels"
+  )
+  expect_error(
+    fmriAR:::compat$plan_from_phi(phi = list(`1` = 0.4), pooling = "parcel", parcels = chr),
+    "must be integer, numeric, or factor labels"
+  )
+
+  # whiten_apply refuses them as well, rather than silently whitening the wrong
+  # voxels with another parcel's coefficients.
+  pl <- fmriAR::fit_noise(A, parcels = rep(1:4, length.out = 16L),
+                          pooling = "parcel", method = "ar", p = 2L)
+  X <- cbind(1, seq_len(200L) / 200)
+  expect_error(fmriAR::whiten_apply(pl, X, A, parcels = chr),
+               "must be integer, numeric, or factor labels")
+
+  # Label types that do coerce are untouched, and all agree with each other.
+  ref <- fmriAR::fit_noise(A, parcels = rep(1:4, length.out = 16L),
+                           pooling = "parcel", method = "ar", p = 2L)
+  for (lab in list(rep(1:4, length.out = 16L),
+                   rep(c(1, 3, 7, 12), length.out = 16L),
+                   factor(chr),
+                   rep(c(-1, -2, -3, -4), length.out = 16L))) {
+    pl2 <- fmriAR::fit_noise(A, parcels = lab, pooling = "parcel",
+                             method = "ar", p = 2L)
+    expect_length(pl2$phi_by_parcel, 4L)
+    # Compare the values, not the keys: the keys are the caller's own labels
+    # and legitimately differ between codings.
+    expect_equal(unname(sort(vapply(pl2$gamma_by_parcel, function(z) z[1], 0))),
+                 unname(sort(vapply(ref$gamma_by_parcel, function(z) z[1], 0))),
+                 tolerance = 1e-10)
+  }
+})
+
 test_that("sigma2 is NA when censoring truncates gamma short of lag p", {
   # Global pooling truncates gamma to the shortest run. Scrubbing every other
   # frame of one run leaves it with no adjacent pair, hence no lag-1 estimate,

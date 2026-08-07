@@ -107,7 +107,7 @@ afni_restricted_plan <- function(resid, runs = NULL, parcels = NULL,
   }
 
   # parcel mode
-  parcels <- as.integer(parcels); stopifnot(length(parcels) == v)
+  parcels <- .parcel_codes(parcels); stopifnot(length(parcels) == v)
   Pids <- sort(unique(parcels))
   phi_by <- setNames(vector("list", length(Pids)), as.character(Pids))
   th_by  <- setNames(vector("list", length(Pids)), as.character(Pids))

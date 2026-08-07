@@ -210,6 +210,32 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
   min(max(s2, 1e-12), gamma[1])
 }
 
+# Parcel labels as integer codes, refusing anything that does not survive the
+# coercion. as.integer() turns a character label into NA, which then matches no
+# voxel, and the failure surfaced far downstream as "invalid K" from the
+# estimator -- a message that names nothing the caller passed.
+#
+# Character labels are refused rather than mapped to codes the way `runs` are:
+# fit_noise and whiten_apply would each have to derive the same mapping from
+# their own copy of the vector, and nothing on the plan records it, so a caller
+# who passed a different subset or ordering to whiten_apply would silently
+# whiten voxels with another parcel's coefficients. Making the caller convert
+# once, explicitly, keeps that coding visible and under their control.
+.parcel_codes <- function(x, arg = "parcels") {
+  if (is.factor(x)) return(as.integer(x))
+  codes <- suppressWarnings(as.integer(x))
+  bad <- is.na(codes) & !is.na(x)
+  if (any(bad)) {
+    u <- unique(as.character(x[bad]))
+    ex <- paste0("'", u[seq_len(min(3L, length(u)))], "'", collapse = ", ")
+    stop("'", arg, "' must be integer, numeric, or factor labels; ", sum(bad),
+         " value(s) could not be coerced to a parcel code (", ex, "). ",
+         "Convert explicitly with as.integer(factor(", arg, ")), and use the ",
+         "same coding when fitting and when applying the plan.", call. = FALSE)
+  }
+  codes
+}
+
 # Indices of non-censored timepoints plus the 0-based starts of the contiguous
 # segments they form. A segment breaks at a run boundary or wherever censoring
 # removed a frame, so no lag product ever spans a discontinuity.
@@ -607,7 +633,7 @@ fit_noise <- function(resid = NULL,
   if (pooling == "parcel") {
     if (!identical(method, "ar")) stop("Parcel pooling currently supports method = 'ar' only")
     stopifnot(!is.null(parcels))
-    parcels <- as.integer(parcels)
+    parcels <- .parcel_codes(parcels)
     stopifnot(length(parcels) == ncol(resid))
 
     # Drop censored frames and segment at both run boundaries and censoring
@@ -665,9 +691,9 @@ fit_noise <- function(resid = NULL,
     } else {
       required_keys <- c("coarse", "medium", "fine")
       stopifnot(all(required_keys %in% names(parcel_sets)))
-      parcels_coarse <- as.integer(parcel_sets$coarse)
-      parcels_medium <- as.integer(parcel_sets$medium)
-      parcels_fine <- as.integer(parcel_sets$fine)
+      parcels_coarse <- .parcel_codes(parcel_sets$coarse, "parcel_sets$coarse")
+      parcels_medium <- .parcel_codes(parcel_sets$medium, "parcel_sets$medium")
+      parcels_fine <- .parcel_codes(parcel_sets$fine, "parcel_sets$fine")
       stopifnot(length(parcels_coarse) == ncol(resid))
       stopifnot(length(parcels_medium) == ncol(resid))
       stopifnot(all(parcels_fine == parcels))
@@ -917,7 +943,7 @@ whiten_apply <- function(plan, X, Y, runs = NULL, run_starts = NULL, censor = NU
     parcels_vec <- plan$parcels
     if (!is.null(parcels)) {
       stopifnot(length(parcels) == ncol(Y))
-      parcels_vec <- as.integer(parcels)
+      parcels_vec <- .parcel_codes(parcels)
     }
     stopifnot(!is.null(parcels_vec))
     stopifnot(length(parcels_vec) == ncol(Y))

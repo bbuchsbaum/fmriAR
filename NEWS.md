@@ -31,6 +31,18 @@ This release fixes several defects that silently produced wrong results rather
 than errors. Analyses run with `pooling = "parcel"` or with `censor` under 0.3.2
 should be rerun.
 
+* Parcel labels that do not survive `as.integer()` are now refused at the
+  boundary with a message naming the offending values. Character labels became
+  `NA`, matched no voxel, and surfaced far downstream as `invalid K`, which
+  names nothing the caller passed. The check covers every exported entry point
+  that accepts parcels: `fit_noise()` (including `parcel_sets`),
+  `whiten_apply()`, `afni_restricted_plan()`, and `compat$plan_from_phi()`.
+  Integer, numeric, and factor labels are unaffected. Character labels are
+  refused rather than mapped to codes the way `runs` are, because `fit_noise()`
+  and `whiten_apply()` would each have to derive the same mapping from their own
+  copy of the vector and nothing on the plan records it; convert once with
+  `as.integer(factor(parcels))` and reuse that coding.
+
 * Fixed order selection for `pooling = "parcel"`. The innovation sequence used to
   score BIC was built with a feedback filter rather than the intended FIR filter,
   which inflated the variance at every order and made order 0 always win. The
