@@ -61,6 +61,36 @@ rather than errors. Analyses run with `pooling = "parcel"` or with
 - Multiscale pooling sizes the autocovariance to the pooling target
   rather than the selected order, removing a zero-filling step that
   drove Yule-Walker to coefficients pinned at the stationarity boundary.
+  The multiscale autocovariance is also estimated with a per-run mean
+  rather than a per-segment one, so the `p_target` and `acvf_pooled`
+  paths no longer reintroduce the censoring defect described above.
+
+- [`whiten_apply()`](https://bbuchsbaum.github.io/fmriAR/reference/whiten_apply.md)
+  returns rows in input order for any run labelling. Results were
+  reassembled in sorted run-label order, so runs labelled in any order
+  other than ascending-in-time silently produced a row permutation of
+  the correct answer for both `X` and `Y`.
+
+- Combining `parcel_sets` with `censor` no longer fails with “incorrect
+  length for ‘group’”.
+
+- The autocovariance is made positive definite with a margin rather than
+  merely non-negative. Landing on the boundary set a reflection
+  coefficient to exactly 1, collapsing the Levinson prediction error to
+  its floor, which BIC read as a perfect fit and used to select the
+  maximum order; the resulting filters amplified variance under
+  censoring.
+
+- `enforce_stationary_ar()` now guarantees characteristic roots strictly
+  outside the unit circle. Clamping reflection coefficients alone left
+  the roots on the circle at high order.
+
+- Order *selection* is bounded by the available sample size, so BIC can
+  no longer choose AR(8) from eleven observations. An explicitly
+  requested `p` is still honoured as given.
+
+- `p_max` at or near the series length no longer fails with “missing
+  value where TRUE/FALSE needed”.
 
 ## fmriAR 0.3.2
 
