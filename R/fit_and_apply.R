@@ -186,6 +186,19 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
   c(g_unb[1L], g_unb[-1L] * lo)
 }
 
+# Innovation variance implied by an autocovariance and an AR coefficient vector:
+# sigma2 = gamma_0 - sum_k phi_k gamma_k. Deriving it here rather than carrying
+# the value from estimation keeps sigma2 consistent with the phi actually stored
+# on the plan, which differs after stationarity clamping or multiscale pooling.
+.sigma2_from_gamma_phi <- function(gamma, phi) {
+  if (!length(gamma) || !is.finite(gamma[1])) return(NA_real_)
+  phi <- phi[is.finite(phi)]
+  if (!length(phi)) return(gamma[1])
+  k <- min(length(phi), length(gamma) - 1L)
+  if (k < 1L) return(gamma[1])
+  max(gamma[1] - sum(phi[seq_len(k)] * gamma[seq_len(k) + 1L]), 1e-12)
+}
+
 # Indices of non-censored timepoints plus the 0-based starts of the contiguous
 # segments they form. A segment breaks at a run boundary or wherever censoring
 # removed a frame, so no lag product ever spans a discontinuity.
@@ -340,10 +353,19 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 #'   from, so consumers can reconstruct the covariance it implies rather than
 #'   only its correlation structure:
 #'   \itemize{
-#'     \item `gamma`: list of autocovariance vectors (lags 0..p), one per pooling
-#'       unit -- a single entry for `pooling = "global"`, one per run for
-#'       `pooling = "run"`.
-#'     \item `sigma2`: list of innovation variances, matching `gamma`.
+#'     \item `gamma`: list of autocovariance vectors, one per pooling unit -- a
+#'       single entry for `pooling = "global"`, one per run for
+#'       `pooling = "run"`. Lags run 0 to the highest the data supported, which
+#'       is governed by `p_max` and the run length rather than by `p`, so
+#'       `fit_noise(p = 1, p_max = 6)` returns seven values, not two. Under
+#'       global pooling every run is truncated to the shortest available length
+#'       before averaging, since a zero-padded autocovariance is not a valid
+#'       covariance.
+#'     \item `sigma2`: list of innovation variances, matching `gamma`, derived
+#'       as `gamma_0 - sum_k phi_k gamma_k` from the coefficients stored on the
+#'       plan so the two are always mutually consistent. `NA` for
+#'       `method = "arma"`, where no comparably cheap voxel-scale innovation
+#'       variance is available.
 #'     \item `gamma_by_parcel`, `sigma2_by_parcel`: the same quantities per
 #'       parcel when `pooling = "parcel"`, keyed like `phi_by_parcel`.
 #'   }
@@ -702,8 +724,32 @@ fit_noise <- function(resid = NULL,
     order_vec <- c(p = keep, q = 0L)
 
     # Per-parcel noise scale and shape, keyed like phi_by_parcel.
-    gamma_parcel <- est_f$acvf[names(phi_parcel)]
-    sigma2_parcel <- est_f$sigma2[names(phi_parcel)]
+    #
+    # gamma is computed from the VOXELS in each parcel, not from the parcel-mean
+    # series that phi was estimated on. The parcel mean is the right basis for
+    # phi -- correlation structure is scale-invariant -- but its variance is
+    # smaller than a voxel's by the number of voxels averaged, so reporting it
+    # as the noise scale understated the noise by exactly that factor (16-fold
+    # at 16 voxels per parcel) and made the plan's units depend on the pooling
+    # mode. sigma2 is then derived from the phi actually stored, since under
+    # multiscale pooling the fine-scale innovation variance no longer matches
+    # the pooled coefficients.
+    n_valid <- length(seg$idx)
+    seg_id_p <- cumsum(seq_len(n_valid) %in% (seg$starts0 + 1L))
+    resid_valid <- resid[seg$idx, , drop = FALSE]
+    gamma_parcel <- setNames(lapply(names(phi_parcel), function(k) {
+      cols <- which(parcels == as.integer(k))
+      if (!length(cols)) return(numeric(0))
+      lag_k <- max(as.integer(target), length(phi_parcel[[k]]), 1L)
+      .acvf_from_pooled(
+        .pooled_acvf_segments(resid_valid[, cols, drop = FALSE], seg_id_p,
+                              lag_k, center_id = seg$run_id),
+        order = lag_k)
+    }), names(phi_parcel))
+    sigma2_parcel <- setNames(
+      lapply(names(phi_parcel), function(k)
+        .sigma2_from_gamma_phi(gamma_parcel[[k]], phi_parcel[[k]])),
+      names(phi_parcel))
 
     parcel_ids <- names(phi_parcel)
     if (is.null(parcel_ids)) parcel_ids <- as.character(sort(unique(parcels)))
@@ -748,21 +794,32 @@ fit_noise <- function(resid = NULL,
     if (length(theta_pooled)) theta_pooled <- enforce_invertible_ma(theta_pooled)
     phi_list <- list(phi_pooled)
     theta_list <- list(theta_pooled)
-    # Pool the noise scale the same length-weighted way as the coefficients.
-    gmax <- max(vapply(estimates, function(e) length(e$gamma %||% numeric(0)), 0L))
-    G <- matrix(0, length(estimates), max(gmax, 1L))
-    for (i in seq_along(estimates)) {
-      gi <- estimates[[i]]$gamma
-      if (length(gi)) G[i, seq_along(gi)] <- gi
+    # Pool the autocovariance length-weighted, but TRUNCATE every run to the
+    # shortest available length rather than zero-padding to the longest. Runs
+    # legitimately reach different lags when their lengths or censoring differ,
+    # and a zero-padded acvf is not a covariance at all: Toeplitz(1, 0.9, 0, 0)
+    # has a negative eigenvalue. Averaging equal-length PD Toeplitz matrices is
+    # PD by convexity; averaging zero-padded ones is not, and consumers building
+    # Sigma from gamma got negative contrast variances.
+    glens <- vapply(estimates, function(e) length(e$gamma %||% numeric(0)), 0L)
+    gmin <- if (length(glens)) min(glens) else 0L
+    gamma_list <- if (gmin > 0L) {
+      G <- do.call(rbind, lapply(estimates, function(e) e$gamma[seq_len(gmin)]))
+      list(as.numeric(drop(crossprod(w, G))))
+    } else {
+      list(numeric(0))
     }
-    gamma_list <- list(as.numeric(drop(crossprod(w, G))))
-    sigma2_list <- list(sum(w * vapply(estimates,
-      function(e) if (is.null(e$sigma2)) NA_real_ else e$sigma2, numeric(1))))
+    sigma2_list <- list(if (identical(method, "arma")) NA_real_ else
+      .sigma2_from_gamma_phi(gamma_list[[1]], phi_pooled))
   } else {
     phi_list <- lapply(estimates, `[[`, "phi")
     theta_list <- lapply(estimates, `[[`, "theta")
     gamma_list <- lapply(estimates, function(e) e$gamma %||% numeric(0))
-    sigma2_list <- lapply(estimates, function(e) e$sigma2 %||% NA_real_)
+    sigma2_list <- if (identical(method, "arma")) {
+      rep(list(NA_real_), length(estimates))
+    } else {
+      mapply(.sigma2_from_gamma_phi, gamma_list, phi_list, SIMPLIFY = FALSE)
+    }
   }
 
   order_vec <- if (pooling == "global") {

@@ -775,3 +775,110 @@ test_that("ARMA reports gamma at voxel scale and declines to guess sigma2", {
   # run-mean value.
   expect_true(is.na(arma$sigma2[[1]]))
 })
+
+test_that("pooled gamma stays a valid covariance across runs of unequal reach", {
+  # Regression guard: runs reach different lags when their lengths or censoring
+  # differ, and the pooled gamma zero-padded the shorter ones. A zero-padded
+  # autocovariance is not a covariance -- Toeplitz(1, 0.9, 0, 0) has a negative
+  # eigenvalue -- so a consumer building Sigma from gamma got NEGATIVE contrast
+  # variances from the documented usage.
+  minev <- function(g) {
+    if (length(g) < 2L) return(Inf)
+    min(eigen(stats::toeplitz(g), symmetric = TRUE, only.values = TRUE)$values)
+  }
+  for (s in 1:6) {
+    for (fr in c(0.1, 0.3, 0.5)) {
+      resid <- ar_sim(400L, 0.9, nvox = 12L, seed = 5000 + s)
+      set.seed(6000 + s)
+      cens <- sort(sample(201:400, round(fr * 200)))   # only run 2 is scrubbed
+      plan <- fmriAR::fit_noise(resid, runs = rep(1:2, each = 200L),
+                                censor = cens, pooling = "global",
+                                method = "ar", p = "auto", p_max = 6L)
+      g <- plan$gamma[[1]]
+      expect_gt(minev(g), 0,
+                label = sprintf("min eigenvalue, seed %d censor %.1f", s, fr))
+      expect_false(inherits(try(chol(stats::toeplitz(g)), silent = TRUE),
+                            "try-error"))
+    }
+  }
+})
+
+test_that("sigma2 is consistent with the coefficients stored on the plan", {
+  # Under multiscale pooling sigma2 used to be the fine-scale innovation
+  # variance while phi was the pooled estimate, so the two disagreed by up to 9%.
+  implied <- function(g, phi) {
+    k <- min(length(phi), length(g) - 1L)
+    if (k < 1L) return(g[1])
+    g[1] - sum(phi[seq_len(k)] * g[seq_len(k) + 1L])
+  }
+  A <- ar_sim(400L, c(0.6, 0.25), nvox = 30L, seed = 5201)
+  pf <- rep(1:5, length.out = 30L)
+
+  g <- fmriAR::fit_noise(A, pooling = "global", method = "ar", p = 2L)
+  expect_equal(g$sigma2[[1]], implied(g$gamma[[1]], g$phi[[1]]), tolerance = 1e-10)
+
+  r <- fmriAR::fit_noise(A, runs = rep(1:2, each = 200L), pooling = "run",
+                         method = "ar", p = 2L)
+  for (i in seq_along(r$gamma)) {
+    expect_equal(r$sigma2[[i]], implied(r$gamma[[i]], r$phi[[i]]), tolerance = 1e-10)
+  }
+
+  for (ms in list(NULL, "acvf_pooled", "pacf_weighted")) {
+    args <- list(resid = A, parcels = pf, pooling = "parcel", method = "ar",
+                 p = 2L, p_target = 2L)
+    if (!is.null(ms)) { args$multiscale <- TRUE; args$ms_mode <- ms }
+    pl <- do.call(fmriAR::fit_noise, args)
+    for (k in names(pl$phi_by_parcel)) {
+      expect_equal(pl$sigma2_by_parcel[[k]],
+                   implied(pl$gamma_by_parcel[[k]], pl$phi_by_parcel[[k]]),
+                   tolerance = 1e-10,
+                   info = paste("mode", if (is.null(ms)) "plain" else ms, "parcel", k))
+    }
+  }
+})
+
+test_that("parcel gamma is on the voxel scale, not the parcel-mean scale", {
+  # Regression guard: gamma_by_parcel came from the parcel-MEAN series, whose
+  # variance is smaller than a voxel's by the number of voxels averaged. The
+  # plan understated the noise by exactly that factor (16x at 16 voxels per
+  # parcel) and its units depended on the pooling mode. phi was unaffected,
+  # which is why it went unnoticed.
+  for (vp in c(2L, 4L, 8L, 16L)) {
+    nv <- vp * 4L
+    resid <- ar_sim(500L, 0.5, nvox = nv, seed = 7000 + vp)
+    pf <- rep(1:4, each = vp)
+    pl <- fmriAR::fit_noise(resid, parcels = pf, pooling = "parcel",
+                            method = "ar", p = 1L)
+    gg <- fmriAR::fit_noise(resid, pooling = "global", method = "ar", p = 1L)
+    ratio <- pl$gamma_by_parcel[[1]][1] / gg$gamma[[1]][1]
+    expect_equal(ratio, 1, tolerance = 0.15,
+                 info = sprintf("%d voxels per parcel", vp))
+  }
+})
+
+test_that("ARMA gamma is voxel-scale under run pooling and censoring too", {
+  # The first ARMA guard covered only pooling = "global" uncensored.
+  set.seed(7301)
+  R <- sapply(1:20, function(i) as.numeric(stats::arima.sim(list(ar = 0.5, ma = 0.4), 400L)))
+  runs <- rep(1:2, each = 200L)
+  cens <- seq(10L, 390L, by = 20L)
+
+  cfgs <- list(
+    global_uncens = list(pooling = "global"),
+    run_uncens    = list(runs = runs, pooling = "run"),
+    global_cens   = list(pooling = "global", censor = cens),
+    run_cens      = list(runs = runs, pooling = "run", censor = cens)
+  )
+  vox_var <- mean(apply(R, 2L, stats::var))
+  for (nm in names(cfgs)) {
+    args <- c(list(resid = R, method = "arma", p = 1L, q = 1L), cfgs[[nm]])
+    plan <- suppressWarnings(do.call(fmriAR::fit_noise, args))
+    for (g in plan$gamma) {
+      expect_gt(length(g), 1L, label = nm)
+      expect_equal(g[1], vox_var, tolerance = 0.25, info = nm)
+      expect_gt(min(eigen(stats::toeplitz(g), symmetric = TRUE,
+                          only.values = TRUE)$values), 0)
+    }
+    expect_true(all(vapply(plan$sigma2, is.na, logical(1))), label = nm)
+  }
+})
