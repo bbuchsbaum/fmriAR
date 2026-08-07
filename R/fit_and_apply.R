@@ -549,7 +549,22 @@ fit_noise <- function(resid = NULL,
       y_mean <- rowMeans(mat_valid)
       pp <- if (identical(p, "auto")) min(2L, p_max) else as.integer(p)
       qq <- as.integer(q)
-      hr_arma(y_mean, p = pp, q = qq, iter = as.integer(hr_iter), step1 = step1)
+      fit <- hr_arma(y_mean, p = pp, q = qq, iter = as.integer(hr_iter),
+                     step1 = step1)
+
+      # Report the noise autocovariance at voxel scale, pooled the same way the
+      # AR path does. hr_arma's own sigma2 is the innovation variance of the
+      # run-MEAN series, which is smaller than the per-voxel value by roughly
+      # the number of voxels averaged -- reporting it as the plan's sigma2 would
+      # understate the noise by that factor. There is no comparably cheap
+      # voxel-scale innovation variance for ARMA, so it is left NA rather than
+      # filled with a number on the wrong scale.
+      seg_id_ma <- cumsum(c(1L, as.integer(diff(valid_idx) > 1L)))
+      lag_ma <- max(1L, pp + qq)
+      pooled_ma <- .pooled_acvf_segments(mat_valid, seg_id_ma, lag_ma)
+      fit$gamma <- .acvf_from_pooled(pooled_ma, order = lag_ma)
+      fit$sigma2 <- NA_real_
+      fit
     }
   }
 

@@ -749,3 +749,29 @@ test_that("the reported gamma reconstructs a valid noise covariance", {
   expect_gt(min(eigen(Sigma, symmetric = TRUE, only.values = TRUE)$values), 0)
   expect_equal(nrow(Sigma), length(g))
 })
+
+test_that("ARMA reports gamma at voxel scale and declines to guess sigma2", {
+  # Regression guard: the ARMA branch returned hr_arma's own sigma2, which is
+  # the innovation variance of the run-MEAN series -- smaller than the per-voxel
+  # value by roughly the number of voxels averaged (0.048 vs 1.095 on identical
+  # data with 20 voxels). A wrong-scale number is worse than none.
+  set.seed(3701)
+  R <- sapply(1:20, function(i) as.numeric(stats::arima.sim(list(ar = 0.5, ma = 0.4), 400L)))
+
+  arma <- fmriAR::fit_noise(R, method = "arma", p = 1L, q = 1L, pooling = "global")
+  ar <- fmriAR::fit_noise(R, method = "ar", p = 1L, pooling = "global")
+
+  # gamma must be the voxel-scale noise autocovariance, agreeing with the AR
+  # path and with the data itself.
+  expect_gt(length(arma$gamma[[1]]), 1L)
+  expect_equal(arma$gamma[[1]][1], ar$gamma[[1]][1], tolerance = 1e-8)
+  expect_equal(arma$gamma[[1]][1], mean(apply(R, 2L, stats::var)), tolerance = 0.05)
+
+  # PD, so it can be used as a covariance.
+  expect_gt(min(eigen(stats::toeplitz(arma$gamma[[1]]), symmetric = TRUE,
+                      only.values = TRUE)$values), 0)
+
+  # sigma2 is unavailable for ARMA and must say so rather than report the
+  # run-mean value.
+  expect_true(is.na(arma$sigma2[[1]]))
+})
