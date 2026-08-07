@@ -76,6 +76,10 @@ should be rerun.
 * `p_max` at or near the series length no longer fails with "missing value
   where TRUE/FALSE needed".
 
+* `whiten_apply()` validates `runs`: a length mismatch was silently recycled
+  by `split()` and an `NA` left that row unwritten in both `X` and `Y`. Both
+  now raise an error, and character run labels are accepted.
+
 * `compat$plan_from_phi()` works with its documented default `theta = NULL` for
   global and run pooling. It previously reported an MA order of `-Inf` and
   produced a plan that `whiten_apply()` rejected with "subscript out of

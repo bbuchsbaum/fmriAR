@@ -735,6 +735,15 @@ whiten_apply <- function(plan, X, Y, runs = NULL, run_starts = NULL, censor = NU
   if (is.null(runs) && !is.null(plan$runs) && length(plan$runs) == n) runs <- plan$runs
   if (is.null(runs)) runs <- rep_len(1L, n)
 
+  # Validate rather than let split() recycle or drop. A short `runs` was
+  # silently recycled, and an NA left that row unwritten in both X and Y.
+  if (length(runs) != n) {
+    stop(sprintf("whiten_apply: 'runs' has length %d but X and Y have %d rows",
+                 length(runs), n))
+  }
+  if (anyNA(runs)) stop("whiten_apply: 'runs' contains NA")
+  runs <- if (is.numeric(runs)) as.integer(runs) else match(runs, unique(runs))
+
   if (identical(plan$pooling, "parcel")) {
     parcels_vec <- plan$parcels
     if (!is.null(parcels)) {

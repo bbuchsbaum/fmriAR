@@ -546,6 +546,24 @@ test_that("order selection is bounded by sample size but an explicit p is not", 
   expect_equal(length(plan_phi(fixed)), 4L)
 })
 
+test_that("whiten_apply rejects malformed runs instead of corrupting output", {
+  # Regression guard: a short `runs` was silently recycled by split(), and an NA
+  # left that row unwritten -- NA in both X and Y, with no error.
+  resid <- ar_sim(20L, 0.5, nvox = 3L, seed = 3201)
+  X <- cbind(1, stats::rnorm(20L))
+  plan <- fmriAR::fit_noise(resid, pooling = "global", method = "ar", p = 1L)
+
+  bad_na <- rep(1:2, each = 10L); bad_na[5] <- NA
+  expect_error(fmriAR::whiten_apply(plan, X, resid, runs = bad_na), "NA")
+  expect_error(fmriAR::whiten_apply(plan, X, resid, runs = rep(1L, 5L)), "length")
+
+  # Character run labels are accepted and treated as grouping labels.
+  out <- fmriAR::whiten_apply(plan, X, resid,
+                              runs = rep(c("a", "b"), each = 10L))
+  expect_false(anyNA(out$Y))
+  expect_equal(dim(out$Y), dim(resid))
+})
+
 test_that("compat plans built without an MA part are usable", {
   # Regression guard: theta = NULL, the documented default, produced
   # order q = -Inf (with a max()-over-nothing warning) and an empty theta list,
