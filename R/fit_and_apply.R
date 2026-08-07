@@ -191,12 +191,23 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 # the value from estimation keeps sigma2 consistent with the phi actually stored
 # on the plan, which differs after stationarity clamping or multiscale pooling.
 .sigma2_from_gamma_phi <- function(gamma, phi) {
-  if (!length(gamma) || !is.finite(gamma[1])) return(NA_real_)
-  phi <- phi[is.finite(phi)]
+  if (!length(gamma) || !is.finite(gamma[1]) || gamma[1] <= 0) return(NA_real_)
   if (!length(phi)) return(gamma[1])
-  k <- min(length(phi), length(gamma) - 1L)
-  if (k < 1L) return(gamma[1])
-  max(gamma[1] - sum(phi[seq_len(k)] * gamma[seq_len(k) + 1L]), 1e-12)
+  # Dropping the non-finite entries would slide every later coefficient onto the
+  # wrong lag, so a phi that is not wholly finite yields no answer at all.
+  if (!all(is.finite(phi))) return(NA_real_)
+  # The sum needs gamma out to lag p. Global pooling truncates gamma to the
+  # shortest run, so a single heavily censored run can leave it shorter than
+  # that, and the terms lost are exactly the ones that pull sigma2 below
+  # gamma_0. A partial sum therefore overstates the innovation variance -- at
+  # the limit, a length-1 gamma returns gamma_0 and declares white noise while
+  # phi on the same plan says otherwise. Report the absence instead.
+  if (length(gamma) - 1L < length(phi)) return(NA_real_)
+  s2 <- gamma[1] - sum(phi * gamma[seq_along(phi) + 1L])
+  # No stationary process has innovation variance above its total variance.
+  # phi that was stationarity-clamped or multiscale-pooled need not match this
+  # unit's own gamma, which let the ratio reach 1.06.
+  min(max(s2, 1e-12), gamma[1])
 }
 
 # Indices of non-censored timepoints plus the 0-based starts of the contiguous
@@ -365,7 +376,10 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 #'       as `gamma_0 - sum_k phi_k gamma_k` from the coefficients stored on the
 #'       plan so the two are always mutually consistent. `NA` for
 #'       `method = "arma"`, where no comparably cheap voxel-scale innovation
-#'       variance is available.
+#'       variance is available, and `NA` whenever `gamma` does not reach lag
+#'       `length(phi)` -- heavy censoring can truncate it that far, and a
+#'       partial sum would overstate the innovation variance rather than
+#'       report that it is unavailable.
 #'     \item `gamma_by_parcel`, `sigma2_by_parcel`: the same quantities per
 #'       parcel when `pooling = "parcel"`, keyed like `phi_by_parcel`.
 #'   }

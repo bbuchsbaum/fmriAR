@@ -806,10 +806,14 @@ test_that("pooled gamma stays a valid covariance across runs of unequal reach", 
 test_that("sigma2 is consistent with the coefficients stored on the plan", {
   # Under multiscale pooling sigma2 used to be the fine-scale innovation
   # variance while phi was the pooled estimate, so the two disagreed by up to 9%.
+  # Compute the full sum deliberately, with no truncation rule of its own. An
+  # earlier version of this helper mirrored the truncation in
+  # .sigma2_from_gamma_phi, so it asserted only that the code agreed with
+  # itself and passed while sigma2 was silently dropping terms. Requiring gamma
+  # to reach lag p is part of the assertion, not a precondition to work around.
   implied <- function(g, phi) {
-    k <- min(length(phi), length(g) - 1L)
-    if (k < 1L) return(g[1])
-    g[1] - sum(phi[seq_len(k)] * g[seq_len(k) + 1L])
+    expect_gte(length(g) - 1L, length(phi))
+    g[1] - sum(phi * g[seq_along(phi) + 1L])
   }
   A <- ar_sim(400L, c(0.6, 0.25), nvox = 30L, seed = 5201)
   pf <- rep(1:5, length.out = 30L)
@@ -833,6 +837,102 @@ test_that("sigma2 is consistent with the coefficients stored on the plan", {
                    implied(pl$gamma_by_parcel[[k]], pl$phi_by_parcel[[k]]),
                    tolerance = 1e-10,
                    info = paste("mode", if (is.null(ms)) "plain" else ms, "parcel", k))
+    }
+  }
+})
+
+test_that("sigma2 is NA when censoring truncates gamma short of lag p", {
+  # Global pooling truncates gamma to the shortest run. Scrubbing every other
+  # frame of one run leaves it with no adjacent pair, hence no lag-1 estimate,
+  # and that collapses the pooled gamma to lag 0 alone. sigma2 used to be
+  # reported as gamma_0 there -- a claim of white noise sitting next to a
+  # clearly non-zero phi on the same plan, overstating the innovation variance
+  # by 1 / (1 - phi^2).
+  A <- ar_sim(240L, 0.6, nvox = 40L, seed = 90210)
+  runs <- rep(1:2, each = 120L)
+  cens <- which(runs == 2L)[seq(2L, 120L, by = 2L)]
+
+  pl <- fmriAR::fit_noise(A, runs = runs, method = "ar", p = 1L,
+                          pooling = "global", censor = cens)
+
+  expect_length(pl$gamma[[1]], 1L)
+  expect_gt(length(pl$phi[[1]]), 0L)
+  expect_true(is.na(pl$sigma2[[1]]))
+  # Specifically not the old answer.
+  expect_false(isTRUE(all.equal(pl$sigma2[[1]], pl$gamma[[1]][1])))
+
+  # The uncensored fit is unaffected: gamma reaches lag p and sigma2 is real.
+  ok <- fmriAR::fit_noise(A, runs = runs, method = "ar", p = 1L, pooling = "global")
+  expect_gte(length(ok$gamma[[1]]) - 1L, length(ok$phi[[1]]))
+  expect_true(is.finite(ok$sigma2[[1]]))
+  expect_equal(ok$sigma2[[1]],
+               ok$gamma[[1]][1] - sum(ok$phi[[1]] * ok$gamma[[1]][seq_along(ok$phi[[1]]) + 1L]),
+               tolerance = 1e-10)
+})
+
+test_that(".sigma2_from_gamma_phi refuses every gamma too short for phi", {
+  f <- fmriAR:::.sigma2_from_gamma_phi
+  g <- c(2.0, 1.2, 0.7, 0.4)
+
+  # Exact reach and surplus reach both answer, using only lags 1..p.
+  expect_equal(f(g, c(0.5, 0.2, 0.1)), 2.0 - (0.5*1.2 + 0.2*0.7 + 0.1*0.4))
+  expect_equal(f(g, 0.5), 2.0 - 0.5*1.2)
+
+  # The partial-sum case is the dangerous one: gamma reaches lag 1 but phi has
+  # three coefficients, so the old code subtracted one term and returned a
+  # number that looked entirely plausible -- no consumer could tell it was
+  # built on a truncated sum. It must decline instead.
+  expect_true(is.na(f(g[1:2], c(0.5, 0.2, 0.1))))
+  expect_true(is.na(f(g[1:3], c(0.5, 0.2, 0.1))))
+  expect_true(is.na(f(g[1], 0.5)))
+
+  # p = 0 is genuinely white noise, so gamma_0 is the right answer, not NA.
+  expect_equal(f(g, numeric(0)), 2.0)
+
+  # A non-finite phi cannot simply be dropped: that would shift later
+  # coefficients onto lags they do not belong to.
+  expect_true(is.na(f(g, c(0.5, NA, 0.1))))
+  expect_true(is.na(f(g, c(NA_real_, NA_real_))))
+
+  # Degenerate gamma_0 is not a variance.
+  expect_true(is.na(f(c(0, 0, 0), 0.5)))
+  expect_true(is.na(f(numeric(0), 0.5)))
+
+  # Upper bound: a phi inconsistent with its own gamma drives the sum the wrong
+  # way -- 2 - (-0.9 - 0.45) = 3.35, an innovation variance 1.7x the total
+  # variance. It must come back capped at gamma_0 exactly. Choose the numbers
+  # deliberately: the obvious sign-flipped case instead sends the sum negative
+  # and floors at 1e-12, exercising the lower bound while appearing to test the
+  # upper one.
+  expect_equal(f(c(2, 1, 0.5), c(-0.9, -0.9)), 2)
+  # Lower bound, kept distinct from the above.
+  expect_equal(f(c(1, -0.9, -0.9), c(-0.9, -0.9)), 1e-12)
+})
+
+test_that("sigma2 never exceeds gamma_0", {
+  # A stationary process cannot have innovation variance above total variance.
+  # Stationarity clamping and multiscale pooling both replace phi with a vector
+  # that need not match the unit's own gamma, which pushed the ratio to 1.06.
+  #
+  # This is a broad invariant sweep, NOT the guard for the upper clamp. The
+  # ratio exceeds 1 in roughly 2 of 1600 fitted units, so the dozen units below
+  # are unlikely to reach the clamp at all and this test still passes if the
+  # clamp is removed. The assertion that actually pins it is the direct
+  # expect_equal(f(c(2, 1, 0.5), c(-0.9, -0.9)), 2) in the unit test above --
+  # do not delete that one believing this covers it. What this test would catch
+  # is a regression making the violation common rather than rare.
+  A <- ar_sim(300L, c(0.7, 0.2), nvox = 24L, seed = 4711)
+  pf <- rep(1:4, length.out = 24L)
+  for (ms in list(NULL, "acvf_pooled", "pacf_weighted")) {
+    args <- list(resid = A, parcels = pf, pooling = "parcel", method = "ar",
+                 p = 2L, p_target = 2L)
+    if (!is.null(ms)) { args$multiscale <- TRUE; args$ms_mode <- ms }
+    pl <- do.call(fmriAR::fit_noise, args)
+    for (k in names(pl$phi_by_parcel)) {
+      s2 <- pl$sigma2_by_parcel[[k]]
+      if (is.na(s2)) next
+      expect_lte(s2, pl$gamma_by_parcel[[k]][1] * (1 + 1e-12))
+      expect_gt(s2, 0)
     }
   }
 })

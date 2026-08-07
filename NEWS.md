@@ -14,7 +14,11 @@
   that reached different lags are truncated to the shortest before averaging
   rather than zero-padded: a zero-padded autocovariance is not a valid
   covariance, and building `Sigma` from one could yield negative contrast
-  variances. The addition is purely additive; existing fields are unchanged. For
+  variances. Truncation can leave `gamma` shorter than `length(phi)` when
+  censoring is heavy, and `sigma2` is then `NA` rather than a partial sum,
+  which would overstate the innovation variance. The condition does not arise
+  below roughly 25% censoring. The addition is purely additive; existing fields
+  are unchanged. For
   `method = "arma"`, `gamma` is the voxel-scale noise autocovariance pooled the
   same way as for AR, and `sigma2` is `NA`: Hannan-Rissanen's own innovation
   variance is that of the run-mean series, smaller than the per-voxel value by

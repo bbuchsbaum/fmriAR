@@ -91,7 +91,10 @@ covariance.
 as \verb{gamma_0 - sum_k phi_k gamma_k} from the coefficients stored on the
 plan so the two are always mutually consistent. \code{NA} for
 \code{method = "arma"}, where no comparably cheap voxel-scale innovation
-variance is available.
+variance is available, and \code{NA} whenever \code{gamma} does not reach lag
+\code{length(phi)} -- heavy censoring can truncate it that far, and a
+partial sum would overstate the innovation variance rather than
+report that it is unavailable.
 \item \code{gamma_by_parcel}, \code{sigma2_by_parcel}: the same quantities per
 parcel when \code{pooling = "parcel"}, keyed like \code{phi_by_parcel}.
 }
