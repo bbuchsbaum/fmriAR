@@ -76,6 +76,11 @@ should be rerun.
 * `p_max` at or near the series length no longer fails with "missing value
   where TRUE/FALSE needed".
 
+* `compat$plan_from_phi()` works with its documented default `theta = NULL` for
+  global and run pooling. It previously reported an MA order of `-Inf` and
+  produced a plan that `whiten_apply()` rejected with "subscript out of
+  bounds" -- the plan built by the example in `?compat`.
+
 # fmriAR 0.3.2
 
 * `fit_noise()` gains a `censor` parameter for motion scrubbing support. Censored

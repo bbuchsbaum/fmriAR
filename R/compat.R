@@ -31,10 +31,16 @@ compat_env <- local({
     method <- match.arg(method)
 
     if (pooling %in% c("global","run")) {
-      phi_list   <- if (is.list(phi)) phi else list(phi)
-      theta_list <- if (is.null(theta)) list() else if (is.list(theta)) theta else list(theta)
-      order_vec  <- c(p = max(vapply(phi_list, length, 0L)),
-                      q = max(vapply(theta_list, length, 0L)))
+      phi_list <- if (is.list(phi)) phi else list(phi)
+      # theta = NULL is the documented default. Building an empty list here left
+      # whiten_apply() indexing theta_list[[ri]] out of bounds, and max() over
+      # nothing made the reported MA order -Inf. Give every entry of phi_list a
+      # matching zero-length MA part instead.
+      theta_list <- if (is.null(theta)) {
+        rep(list(numeric(0)), length(phi_list))
+      } else if (is.list(theta)) theta else list(theta)
+      order_vec <- c(p = max(vapply(phi_list, length, 0L)),
+                     q = if (length(theta_list)) max(vapply(theta_list, length, 0L)) else 0L)
       return(new_whiten_plan(phi = phi_list,
                              theta = theta_list,
                              order = order_vec,

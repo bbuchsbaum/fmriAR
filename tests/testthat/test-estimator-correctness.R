@@ -546,6 +546,34 @@ test_that("order selection is bounded by sample size but an explicit p is not", 
   expect_equal(length(plan_phi(fixed)), 4L)
 })
 
+test_that("compat plans built without an MA part are usable", {
+  # Regression guard: theta = NULL, the documented default, produced
+  # order q = -Inf (with a max()-over-nothing warning) and an empty theta list,
+  # so whiten_apply() failed with "subscript out of bounds". The example in
+  # ?compat builds exactly this plan.
+  X <- cbind(1, stats::rnorm(60L))
+  Y <- ar_sim(60L, 0.5, nvox = 4L, seed = 3101)
+
+  for (pooling in c("global", "run")) {
+    plan <- expect_silent(
+      fmriAR:::compat$plan_from_phi(c(0.4, 0.2), pooling = pooling,
+                                    runs = if (pooling == "run")
+                                      rep(1:2, each = 30L) else NULL)
+    )
+    expect_equal(plan$order[["p"]], 2L)
+    expect_equal(plan$order[["q"]], 0L)
+    out <- fmriAR::whiten_apply(plan, X, Y,
+                                runs = if (pooling == "run")
+                                  rep(1:2, each = 30L) else NULL)
+    expect_equal(dim(out$Y), dim(Y))
+    expect_false(identical(out$Y, Y))
+  }
+
+  # An explicit MA part still reports the right order.
+  plan_ma <- fmriAR:::compat$plan_from_phi(c(0.4), theta = c(0.3), method = "arma")
+  expect_equal(plan_ma$order[["q"]], 1L)
+})
+
 test_that("acorr_diagnostics honours its runs argument", {
   # Regression guard: `runs` was documented and accepted but never referenced,
   # so the result was identical with and without it.
