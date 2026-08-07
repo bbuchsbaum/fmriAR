@@ -62,6 +62,9 @@
 <span>  beta <span class="op">=</span> <span class="fl">0.5</span>,</span>
 <span>  hr_iter <span class="op">=</span> <span class="fl">0L</span>,</span>
 <span>  step1 <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"burg"</span>, <span class="st">"yw"</span><span class="op">)</span>,</span>
+<span>  design <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  acvf_correction <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  correction_max_lag <span class="op">=</span> <span class="fl">25L</span>,</span>
 <span>  parallel <span class="op">=</span> <span class="cn">FALSE</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
@@ -148,6 +151,32 @@ when computing autocorrelations. Each run's estimation uses only its own valid
 
 <dt id="arg-step-">step1<a class="anchor" aria-label="anchor" href="#arg-step-"></a></dt>
 <dd><p>Preliminary high-order AR fit method for HR ("burg" or "yw").</p></dd>
+
+
+<dt id="arg-design">design<a class="anchor" aria-label="anchor" href="#arg-design"></a></dt>
+<dd><p>Optional design matrix (timepoints x regressors) whose
+projection produced <code>resid</code>. Supplying it corrects the downward bias that
+projecting a design out of the data puts into the autocovariance, and
+hence into <code>phi</code>. Opt-in, because it changes estimates and needs the design
+to be the one that actually formed the residuals. Currently supported for
+<code>pooling = "global"</code> and <code>"run"</code> with <code>method = "ar"</code>.</p></dd>
+
+
+<dt id="arg-acvf-correction">acvf_correction<a class="anchor" aria-label="anchor" href="#arg-acvf-correction"></a></dt>
+<dd><p>Precomputed bias matrices from <code><a href="acvf_bias_matrix.html">acvf_bias_matrix()</a></code>,
+as an alternative to <code>design</code> when many datasets share one design. A single
+matrix is applied to every run; a list is matched against the runs in
+order. Mutually exclusive with <code>design</code>.</p></dd>
+
+
+<dt id="arg-correction-max-lag">correction_max_lag<a class="anchor" aria-label="anchor" href="#arg-correction-max-lag"></a></dt>
+<dd><p>Lag budget for the bias correction (default 25).
+The correction solves a system truncated at this lag, so too small a budget
+leaves bias behind; too large a one approaches the run length and makes the
+system ill-conditioned, which is refused with a warning rather than
+solved. A design leaving fewer residual degrees of freedom than the budget
+also cannot support it, and the budget is reduced accordingly, again with a
+warning. Ignored unless <code>design</code> is supplied.</p></dd>
 
 
 <dt id="arg-parallel">parallel<a class="anchor" aria-label="anchor" href="#arg-parallel"></a></dt>

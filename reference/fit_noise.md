@@ -25,6 +25,9 @@ fit_noise(
   beta = 0.5,
   hr_iter = 0L,
   step1 = c("burg", "yw"),
+  design = NULL,
+  acvf_correction = NULL,
+  correction_max_lag = 25L,
   parallel = FALSE
 )
 ```
@@ -116,6 +119,33 @@ fit_noise(
 - step1:
 
   Preliminary high-order AR fit method for HR ("burg" or "yw").
+
+- design:
+
+  Optional design matrix (timepoints x regressors) whose projection
+  produced `resid`. Supplying it corrects the downward bias that
+  projecting a design out of the data puts into the autocovariance, and
+  hence into `phi`. Opt-in, because it changes estimates and needs the
+  design to be the one that actually formed the residuals. Currently
+  supported for `pooling = "global"` and `"run"` with `method = "ar"`.
+
+- acvf_correction:
+
+  Precomputed bias matrices from
+  [`acvf_bias_matrix()`](https://bbuchsbaum.github.io/fmriAR/reference/acvf_bias_matrix.md),
+  as an alternative to `design` when many datasets share one design. A
+  single matrix is applied to every run; a list is matched against the
+  runs in order. Mutually exclusive with `design`.
+
+- correction_max_lag:
+
+  Lag budget for the bias correction (default 25). The correction solves
+  a system truncated at this lag, so too small a budget leaves bias
+  behind; too large a one approaches the run length and makes the system
+  ill-conditioned, which is refused with a warning rather than solved. A
+  design leaving fewer residual degrees of freedom than the budget also
+  cannot support it, and the budget is reduced accordingly, again with a
+  warning. Ignored unless `design` is supplied.
 
 - parallel:
 

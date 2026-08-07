@@ -36,5 +36,5 @@ print(plan)
 #>   Pooling: global
 #>   Exact first-sample scaling: AR(1)
 #>   Coefficients:
-#>     global: phi = 0.0183, -0.1920
+#>     global: phi = 0.180, -0.133
 ```
