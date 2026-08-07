@@ -190,6 +190,62 @@ test_that("unsupported correction combinations are refused, not silently ignored
                "3 matrices but there are 1 runs")
 })
 
+test_that("correction restores the noise scale, not just its shape, for AR(2)", {
+  skip_on_cran()
+  # gamma_0 matters on its own: it is the noise variance a consumer builds
+  # standard errors from. A 28-column design understates it by about 24%
+  # (1.72 against a truth of 2.24), which understates every standard error
+  # derived from it. Both AR(2) coefficients must improve as well -- a
+  # correction that fixed lag 1 by distorting lag 2 would be no use.
+  set.seed(5150)
+  n <- 300L; nvox <- 60L
+  phi <- c(0.5, 0.3)
+  g0_true <- (1 - phi[2]) / ((1 + phi[2]) * ((1 - phi[2])^2 - phi[1]^2))
+
+  X <- cbind(1, poly(seq_len(n), 3), matrix(rnorm(n * 24), n, 24))
+  M <- diag(n) - X %*% solve(crossprod(X), t(X))
+  R <- matrix(0, n, nvox)
+  for (v in seq_len(nvox)) R[, v] <- M %*% as.numeric(stats::arima.sim(list(ar = phi), n))
+
+  raw <- fit_noise(R, method = "ar", p = 2L, pooling = "global")
+  cor <- fit_noise(R, method = "ar", p = 2L, pooling = "global", design = X)
+
+  expect_lt(abs(cor$gamma[[1]][1] - g0_true), abs(raw$gamma[[1]][1] - g0_true))
+  expect_lt(abs(cor$gamma[[1]][1] - g0_true) / g0_true, 0.12)
+  for (j in 1:2) {
+    expect_lt(abs(cor$phi[[1]][j] - phi[j]), abs(raw$phi[[1]][j] - phi[j]) + 1e-8,
+              label = paste("coefficient", j))
+  }
+})
+
+test_that("correction still helps across runs and censoring", {
+  skip_on_cran()
+  set.seed(6161)
+  n <- 300L; nvox <- 40L; phi <- 0.5
+  runs <- rep(1:4, each = 75L)
+  X <- cbind(1, poly(seq_len(n), 3), matrix(rnorm(n * 12), n, 12))
+  M <- diag(n) - X %*% solve(crossprod(X), t(X))
+  R <- matrix(0, n, nvox)
+  for (v in seq_len(nvox)) {
+    e <- numeric(n)
+    for (r in 1:4) {
+      idx <- which(runs == r)
+      e[idx] <- as.numeric(stats::arima.sim(list(ar = phi), length(idx)))
+    }
+    R[, v] <- M %*% e
+  }
+  for (cf in list(NULL, sort(sample(seq_len(n), 60L)), sort(sample(seq_len(n), 120L)))) {
+    raw <- fit_noise(R, runs = runs, censor = cf, method = "ar", p = 1L,
+                     pooling = "global")
+    cor <- fit_noise(R, runs = runs, censor = cf, method = "ar", p = 1L,
+                     pooling = "global", design = X)
+    lbl <- paste("censored", length(cf))
+    expect_lt(abs(cor$phi[[1]][1] - phi), abs(raw$phi[[1]][1] - phi) + 1e-8, label = lbl)
+    expect_lt(abs(cor$phi[[1]][1] - phi), 0.1, label = lbl)
+    expect_true(all(is.finite(cor$gamma[[1]])), label = lbl)
+  }
+})
+
 test_that("an ill-conditioned correction is refused rather than trusted", {
   skip_on_cran()
   set.seed(77)
