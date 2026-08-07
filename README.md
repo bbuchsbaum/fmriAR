@@ -10,8 +10,11 @@ fmriAR provides fast AR/ARMA-based prewhitening for fMRI GLM workflows. It estim
 ## Installation
 
 ```r
+install.packages("fmriAR")
+
+# development version:
 # install.packages("remotes")  # only needed once
-remotes::install_github("bbuchsbaum/fmriAR")
+# remotes::install_github("bbuchsbaum/fmriAR")
 library(fmriAR)
 ```
 
