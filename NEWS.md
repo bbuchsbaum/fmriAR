@@ -2,6 +2,44 @@
 
 ## New
 
+* `fit_noise()` can now correct the residual bias in its autocovariance, via a
+  new `design` argument. Autocovariance taken from GLM residuals is biased
+  because `E[ehat ehat'] = M Sigma M` for the residual-forming projection `M`,
+  which pushes `phi` down by an amount that grows with the number of regressors:
+  at T = 300 with true AR(1) rho = 0.4, a 9-column design returns about 0.36 and
+  a 28-column design about 0.25. Passing `design = X` builds the linear map `A`
+  with `E[gamma_raw] = A gamma_true` and solves it, which removed essentially all
+  of that bias in simulation. The correction is opt-in: it changes estimates, and
+  it needs the design that actually produced the residuals. Currently supported
+  for `pooling = "global"` and `"run"` with `method = "ar"`; other combinations
+  raise an error rather than quietly skipping the correction. `acvf_bias_matrix()`
+  is exported so the matrices can be built once and reused across datasets
+  sharing a design, and fed back through `acvf_correction`. `correction_max_lag`
+  (default 25) sets the lag budget; the correction is exact for noise whose
+  autocovariance dies within it and partial under long memory, so with no
+  high-pass filtering the required budget exceeds 150 and the approach is not
+  practical. Two guards keep it from returning nonsense at the edges. A budget
+  approaching the run length makes the system ill-conditioned -- at n = 300 the
+  reciprocal condition number falls from 0.28 at lag 25 to 5e-9 at lag 250, and
+  solving there returned `phi` = 0.96 for a truth of 0.5 -- so a correction that
+  ill-conditioned is skipped with a warning and that run is left uncorrected.
+  And a design leaving fewer residual degrees of freedom than the lag budget
+  cannot support it, so the budget is reduced to what the data carries, again
+  with a warning. Both failures returned finite, positive, plausible-looking
+  numbers, so neither is caught by checking for `NaN`.
+
+* New `noise_acvf()` exports the run- and censor-aware autocovariance estimator
+  the package already used internally. Lag products never cross a run boundary
+  or a censoring gap, and the mean is removed per run rather than per fragment.
+  It returns covariances on the scale of the data, along with the pair count
+  behind each lag and the segmentation actually used, so a consumer can tell an
+  estimate backed by thousands of pairs from one backed by three. Previously the
+  only exported route to autocorrelation was `acorr_diagnostics()`, which
+  returns normalized ACF for inspection rather than covariance. For a
+  run-stationary process the covariance of any contrast factors as
+  `sum_h gamma_h * L T_h L'`, so `gamma` plus a design gives exact contrast
+  variances without refitting.
+
 * `fmriAR_plan` objects now carry the noise scale as well as its shape:
   `gamma` (autocovariance, lags 0..p) and `sigma2` (innovation variance) per
   pooling unit, plus `gamma_by_parcel` and `sigma2_by_parcel` for

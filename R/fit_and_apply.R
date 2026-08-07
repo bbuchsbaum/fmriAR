@@ -152,7 +152,7 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 # censoring thins the pairs available at each lag. Where that is not positive
 # definite, shrink the non-zero lags toward white noise only as far as needed,
 # since Yule-Walker on a non-PD acvf returns explosive coefficients.
-.acvf_from_pooled <- function(pooled, order = NULL, tol = 1e-6) {
+.acvf_from_pooled <- function(pooled, order = NULL, tol = 1e-6, correction = NULL) {
   num <- pooled$num
   pairs <- pooled$pairs
   usable <- which(pairs > 0)
@@ -164,26 +164,89 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
   # lags that carry the signal (phi = 0.95 came back as 0.85 at 40% censoring).
   keep <- if (is.null(order)) seq_len(max(1L, avail))
           else seq_len(max(1L, min(as.integer(order) + 1L, avail)))
-  num <- num[keep]
-  pairs <- pairs[keep]
-  if (!length(num) || pairs[1L] <= 0) return(numeric(0))
+  if (pairs[1L] <= 0) return(numeric(0))
 
-  g_unb <- ifelse(pairs > 0, num / pairs, 0)
+  g_unb <- ifelse(pairs > 0, num / pairs, 0)[seq_len(avail)]
   if (!is.finite(g_unb[1]) || g_unb[1] <= 0) return(numeric(0))
-  if (.acvf_is_psd(g_unb, tol)) return(g_unb)
 
-  # Shrink the non-zero lags toward white noise until the Toeplitz matrix is
-  # positive definite. Shrinking toward the common-divisor form instead is not
-  # guaranteed to terminate: that form can itself be non-PSD, leaving both ends
-  # of the search invalid. At lambda = 0 the matrix is gamma[1] * I, so a valid
-  # point always exists and the bisection cannot fail.
+  # Undo the bias that the residual-forming projection puts into the raw
+  # autocovariance, BEFORE truncating to the requested order. Correcting at the
+  # full lag budget and then truncating is not the same as correcting a
+  # truncated vector: the correction at length L assumes gamma_k = 0 beyond L,
+  # so a short L (order 1 gives L = 2) would throw away most of the information
+  # that makes the correction work.
+  if (!is.null(correction)) g_unb <- .apply_acvf_correction(g_unb, correction)
+  if (!length(g_unb) || !is.finite(g_unb[1]) || g_unb[1] <= 0) return(numeric(0))
+
+  g_unb <- g_unb[keep[keep <= length(g_unb)]]
+  if (!length(g_unb)) return(numeric(0))
+  .shrink_to_pd(g_unb, tol)
+}
+
+# Shrink the non-zero lags toward white noise until the Toeplitz matrix is
+# positive definite. Shrinking toward the common-divisor form instead is not
+# guaranteed to terminate: that form can itself be non-PSD, leaving both ends
+# of the search invalid. At lambda = 0 the matrix is gamma[1] * I, so a valid
+# point always exists and the bisection cannot fail.
+.shrink_to_pd <- function(gamma, tol = 1e-6) {
+  if (!length(gamma)) return(gamma)
+  if (.acvf_is_psd(gamma, tol)) return(gamma)
   lo <- 0
   hi <- 1
   for (i in seq_len(50L)) {
     mid <- (lo + hi) / 2
-    if (.acvf_is_psd(c(g_unb[1L], g_unb[-1L] * mid), tol)) lo <- mid else hi <- mid
+    if (.acvf_is_psd(c(gamma[1L], gamma[-1L] * mid), tol)) lo <- mid else hi <- mid
   }
-  c(g_unb[1L], g_unb[-1L] * lo)
+  c(gamma[1L], gamma[-1L] * lo)
+}
+
+# Solve gamma_raw = A gamma_true for gamma_true.
+#
+# A becomes ill-conditioned as the lag budget approaches the run length: at
+# n = 300 the reciprocal condition number runs 0.28 at lag 25, 3e-3 at lag 100
+# and 5e-9 at lag 250, and that last one returned phi = 0.96 against a truth of
+# 0.5. The blow-up is finite and positive, so checking only for NaN lets it
+# straight through -- refuse on conditioning instead.
+.ACVF_RCOND_MIN <- 1e-6
+
+.apply_acvf_correction <- function(gamma, A) {
+  L <- min(length(gamma), nrow(A))
+  if (L < 1L) return(gamma)
+  Asub <- A[seq_len(L), seq_len(L), drop = FALSE]
+  rc <- tryCatch(rcond(Asub), error = function(e) 0)
+  if (!is.finite(rc) || rc < .ACVF_RCOND_MIN) return(gamma)
+  out <- tryCatch(as.numeric(solve(Asub, gamma[seq_len(L)])),
+                  error = function(e) NULL)
+  if (is.null(out) || !all(is.finite(out)) || out[1] <= 0) return(gamma)
+  if (length(gamma) > L) out <- c(out, gamma[(L + 1L):length(gamma)])
+  out
+}
+
+# Conditioning is a property of the matrix, not of any one solve, so it is
+# checked once per run here rather than on every .acvf_from_pooled() call --
+# otherwise one unusable budget produces the same warning eight times per fit.
+# Dropping the matrix leaves that run uncorrected, which is the honest outcome:
+# the raw estimate is biased but meaningful, and the solve is not.
+.drop_unusable_corrections <- function(corr_by_run) {
+  if (is.null(corr_by_run)) return(NULL)
+  nm <- names(corr_by_run)
+  out <- lapply(seq_along(corr_by_run), function(i) {
+    A <- corr_by_run[[i]]
+    if (is.null(A)) return(NULL)
+    rc <- tryCatch(rcond(A), error = function(e) 0)
+    if (!is.finite(rc) || rc < .ACVF_RCOND_MIN) {
+      warning("residual-bias correction skipped for run ",
+              if (is.null(nm)) i else nm[i],
+              ": the correction matrix is ill-conditioned (rcond = ",
+              format(rc, digits = 3), ") at a lag budget of ", nrow(A) - 1L,
+              ". Lower 'correction_max_lag'. Estimates for this run are ",
+              "uncorrected.", call. = FALSE)
+      return(NULL)
+    }
+    A
+  })
+  names(out) <- nm
+  out
 }
 
 # Innovation variance implied by an autocovariance and an AR coefficient vector:
@@ -384,6 +447,23 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 #' @param beta Size exponent for multi-scale weights (default 0.5).
 #' @param hr_iter Number of Hannan--Rissanen refinement iterations for ARMA.
 #' @param step1 Preliminary high-order AR fit method for HR ("burg" or "yw").
+#' @param design Optional design matrix (timepoints x regressors) whose
+#'   projection produced `resid`. Supplying it corrects the downward bias that
+#'   projecting a design out of the data puts into the autocovariance, and
+#'   hence into `phi`. Opt-in, because it changes estimates and needs the design
+#'   to be the one that actually formed the residuals. Currently supported for
+#'   `pooling = "global"` and `"run"` with `method = "ar"`.
+#' @param acvf_correction Precomputed bias matrices from [acvf_bias_matrix()],
+#'   as an alternative to `design` when many datasets share one design. A single
+#'   matrix is applied to every run; a list is matched against the runs in
+#'   order. Mutually exclusive with `design`.
+#' @param correction_max_lag Lag budget for the bias correction (default 25).
+#'   The correction solves a system truncated at this lag, so too small a budget
+#'   leaves bias behind; too large a one approaches the run length and makes the
+#'   system ill-conditioned, which is refused with a warning rather than
+#'   solved. A design leaving fewer residual degrees of freedom than the budget
+#'   also cannot support it, and the budget is reduced accordingly, again with a
+#'   warning. Ignored unless `design` is supplied.
 #' @param parallel Reserved for future parallel estimation (logical).
 #' @return An object of class `fmriAR_plan` used by [whiten_apply()]. Besides the
 #'   AR/MA coefficients the plan carries the noise scale and shape it was fitted
@@ -455,6 +535,9 @@ fit_noise <- function(resid = NULL,
                       beta = 0.5,
                       hr_iter = 0L,
                       step1 = c("burg", "yw"),
+                      design = NULL,
+                      acvf_correction = NULL,
+                      correction_max_lag = 25L,
                       parallel = FALSE) {
 
   if (is.null(resid)) {
@@ -523,7 +606,31 @@ fit_noise <- function(resid = NULL,
 
   run_mats <- lapply(Rsets, function(idx) resid[idx, , drop = FALSE])
 
-  est_run <- function(mat, censor_rel = integer(0L)) {
+  # Residual-bias correction. Autocovariance taken from GLM residuals is biased
+  # low because E[ehat ehat'] = M Sigma M; correcting needs the design that
+  # produced the residuals, so it stays opt-in.
+  if (!is.null(design) && !is.null(acvf_correction)) {
+    stop("supply either 'design' or 'acvf_correction', not both")
+  }
+  corr_by_run <- NULL
+  if (!is.null(design) || !is.null(acvf_correction)) {
+    if (identical(pooling, "parcel")) {
+      stop("residual-bias correction is not yet supported for pooling = 'parcel'; ",
+           "use pooling = 'global' or 'run', or omit 'design'/'acvf_correction'")
+    }
+    if (!identical(method, "ar")) {
+      stop("residual-bias correction applies to method = 'ar' only")
+    }
+    corr_by_run <- if (!is.null(design)) {
+      .acvf_bias_by_run(design, n, runs = runs, censor = censor,
+                        max_lag = max(1L, as.integer(correction_max_lag)))
+    } else {
+      .normalize_correction(acvf_correction, length(Rsets))
+    }
+    corr_by_run <- .drop_unusable_corrections(corr_by_run)
+  }
+
+  est_run <- function(mat, censor_rel = integer(0L), corr = NULL) {
     # Get valid (non-censored) segments for estimation
     # censor_rel contains 1-based indices within this run
     n_run <- nrow(mat)
@@ -546,22 +653,28 @@ fit_noise <- function(resid = NULL,
       # Pool the autocovariance over the valid segments, centering once across
       # all of this run's surviving frames.
       seg_id <- cumsum(c(1L, as.integer(diff(valid_idx) > 1L)))
-      pooled <- .pooled_acvf_segments(mat[valid_idx, , drop = FALSE], seg_id, p_cap)
-      gamma0 <- .acvf_from_pooled(pooled, order = 0L)
+      # Correcting needs a wider lag budget than the AR order does. Solving the
+      # truncated system at only p_cap lags (2 lags at order 1) discards most of
+      # what makes the correction work, so accumulate further when correcting,
+      # then truncate to p_cap exactly as before.
+      lag_budget <- if (is.null(corr)) p_cap else
+        min(max(p_cap, nrow(corr) - 1L), n_eff - 1L)
+      pooled <- .pooled_acvf_segments(mat[valid_idx, , drop = FALSE], seg_id, lag_budget)
+      gamma0 <- .acvf_from_pooled(pooled, order = 0L, correction = corr)
       null_fit <- list(phi = numeric(0), theta = numeric(0),
                        order = c(p = 0L, q = 0L),
                        gamma = gamma0, sigma2 = if (length(gamma0)) gamma0[1] else NA_real_)
       if (!length(gamma0) || !is.finite(gamma0[1]) || gamma0[1] <= 0) return(null_fit)
       p_cap <- min(p_cap, .acvf_max_lag(pooled))
       if (p_cap < 1L) return(null_fit)
-      gamma_full <- .acvf_from_pooled(pooled, order = p_cap)
+      gamma_full <- .acvf_from_pooled(pooled, order = p_cap, correction = corr)
       null_fit$gamma <- gamma_full
       null_fit$sigma2 <- gamma_full[1]
 
       if (!identical(p, "auto")) {
         pp <- min(as.integer(p), p_cap)
         if (pp <= 0L) return(null_fit)
-        gamma_pp <- .acvf_from_pooled(pooled, order = pp)
+        gamma_pp <- .acvf_from_pooled(pooled, order = pp, correction = corr)
         yw <- yw_from_acvf_fast(gamma_pp[seq_len(pp + 1L)], pp)
         return(list(phi = enforce_stationary_ar(yw$phi, 0.99),
                     theta = numeric(0), order = c(p = pp, q = 0L),
@@ -578,7 +691,7 @@ fit_noise <- function(resid = NULL,
       p_sel <- min(p_cap, floor(n_eff / 5))
       if (p_cap >= 1L) {
         for (pp in seq_len(max(0L, p_sel))) {
-          gamma_pp <- .acvf_from_pooled(pooled, order = pp)
+          gamma_pp <- .acvf_from_pooled(pooled, order = pp, correction = corr)
           yw <- yw_from_acvf_fast(gamma_pp[seq_len(pp + 1L)], pp)
           sigma2 <- pmax(yw$sigma2, 1e-12)
           if (!is.finite(sigma2)) next
@@ -811,7 +924,11 @@ fit_noise <- function(resid = NULL,
     ))
   }
 
-  estimates <- mapply(est_run, run_mats, censor_by_run, SIMPLIFY = FALSE)
+  estimates <- if (is.null(corr_by_run)) {
+    mapply(est_run, run_mats, censor_by_run, SIMPLIFY = FALSE)
+  } else {
+    mapply(est_run, run_mats, censor_by_run, corr_by_run, SIMPLIFY = FALSE)
+  }
 
   if (pooling == "global") {
     lens <- vapply(Rsets, length, 0L)

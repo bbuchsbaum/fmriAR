@@ -24,6 +24,9 @@ fit_noise(
   beta = 0.5,
   hr_iter = 0L,
   step1 = c("burg", "yw"),
+  design = NULL,
+  acvf_correction = NULL,
+  correction_max_lag = 25L,
   parallel = FALSE
 )
 }
@@ -70,6 +73,26 @@ when computing autocorrelations. Each run's estimation uses only its own valid
 \item{hr_iter}{Number of Hannan--Rissanen refinement iterations for ARMA.}
 
 \item{step1}{Preliminary high-order AR fit method for HR ("burg" or "yw").}
+
+\item{design}{Optional design matrix (timepoints x regressors) whose
+projection produced \code{resid}. Supplying it corrects the downward bias that
+projecting a design out of the data puts into the autocovariance, and
+hence into \code{phi}. Opt-in, because it changes estimates and needs the design
+to be the one that actually formed the residuals. Currently supported for
+\code{pooling = "global"} and \code{"run"} with \code{method = "ar"}.}
+
+\item{acvf_correction}{Precomputed bias matrices from \code{\link[=acvf_bias_matrix]{acvf_bias_matrix()}},
+as an alternative to \code{design} when many datasets share one design. A single
+matrix is applied to every run; a list is matched against the runs in
+order. Mutually exclusive with \code{design}.}
+
+\item{correction_max_lag}{Lag budget for the bias correction (default 25).
+The correction solves a system truncated at this lag, so too small a budget
+leaves bias behind; too large a one approaches the run length and makes the
+system ill-conditioned, which is refused with a warning rather than
+solved. A design leaving fewer residual degrees of freedom than the budget
+also cannot support it, and the budget is reduced accordingly, again with a
+warning. Ignored unless \code{design} is supplied.}
 
 \item{parallel}{Reserved for future parallel estimation (logical).}
 }
