@@ -655,3 +655,21 @@ test_that("stationarity is enforced on every returned plan", {
     }
   }
 })
+
+test_that("ARMA warns rather than silently biasing across censoring gaps", {
+  # Hannan-Rissanen runs on the surviving frames spliced together, so its
+  # regressions span censoring gaps and bias the coefficients. Documented and
+  # warned about rather than left silent.
+  resid <- sapply(1:10, function(i) as.numeric(stats::arima.sim(list(ar = 0.5, ma = 0.4), 300L)))
+  cens <- seq(10L, 290L, by = 10L)
+
+  expect_warning(
+    fmriAR::fit_noise(resid, method = "arma", p = 1L, q = 1L,
+                      pooling = "global", censor = cens),
+    "censoring gaps"
+  )
+  # No censoring, no warning.
+  expect_silent(
+    fmriAR::fit_noise(resid, method = "arma", p = 1L, q = 1L, pooling = "global")
+  )
+})

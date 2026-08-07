@@ -75,6 +75,11 @@ should be rerun.
 * `p_max` at or near the series length no longer fails with "missing value
   where TRUE/FALSE needed".
 
+* `method = "arma"` now warns when combined with `censor`. Censored frames are
+  excluded, but Hannan-Rissanen then runs on the surviving frames spliced
+  together, so its regressions span the gaps and bias both the AR and MA
+  coefficients. Prefer `method = "ar"` when censoring is present.
+
 * `whiten_apply()` validates `runs`: a length mismatch was silently recycled
   by `split()` and an `NA` left that row unwritten in both `X` and `Y`. Both
   now raise an error, and character run labels are accepted.

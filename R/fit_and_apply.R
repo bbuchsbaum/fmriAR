@@ -481,7 +481,18 @@ fit_noise <- function(resid = NULL,
       }
       list(phi = best_phi, theta = numeric(0), order = best_order)
     } else {
-      # For ARMA: use valid timepoints only
+      # For ARMA: use valid timepoints only.
+      #
+      # Censored frames are dropped, but Hannan-Rissanen then runs on the
+      # surviving frames spliced together, so its regressions do span the gaps.
+      # That biases the estimate (an ARMA(1,1) with theta = 0.4 comes back near
+      # 0.30 at 25% censoring). Segmenting it properly is a larger change than
+      # this release carries, so warn rather than fail silently.
+      if (length(censor_rel) && any(diff(valid_idx) > 1L)) {
+        warning("fit_noise: method = 'arma' estimates across censoring gaps; ",
+                "AR and MA coefficients will be biased. Prefer method = 'ar' ",
+                "when censoring is present.", call. = FALSE)
+      }
       mat_valid <- mat[valid_idx, , drop = FALSE]
       y_mean <- rowMeans(mat_valid)
       pp <- if (identical(p, "auto")) min(2L, p_max) else as.integer(p)
