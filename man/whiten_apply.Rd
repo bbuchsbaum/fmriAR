@@ -23,7 +23,8 @@ whiten_apply(
 
 \item{Y}{Numeric matrix of data (time x voxels).}
 
-\item{runs}{Optional run labels.}
+\item{runs}{Optional run labels, one per row. Each label must occupy one
+contiguous block and may not be missing.}
 
 \item{run_starts}{Optional 0-based run start indices (alternative to \code{runs}).}
 

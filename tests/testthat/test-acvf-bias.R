@@ -74,6 +74,23 @@ test_that("the bias matrix is exact with runs and censoring too", {
   }
 })
 
+test_that("the bias matrix is invariant to design reparameterization", {
+  n <- 60L
+  X <- cbind(1, poly(seq_len(n), 3))
+  ref <- acvf_bias_matrix(X, max_lag = 6L)[[1L]]
+
+  permuted <- X[, c(4, 1, 3, 2), drop = FALSE]
+  scaled <- sweep(X, 2L, c(1, 1000, 0.1, 7), `*`)
+  rank_deficient <- cbind(X, duplicate = X[, 2L])
+
+  expect_equal(acvf_bias_matrix(permuted, max_lag = 6L)[[1L]], ref,
+               tolerance = 1e-12)
+  expect_equal(acvf_bias_matrix(scaled, max_lag = 6L)[[1L]], ref,
+               tolerance = 1e-12)
+  expect_equal(acvf_bias_matrix(rank_deficient, max_lag = 6L)[[1L]], ref,
+               tolerance = 1e-12)
+})
+
 test_that("lag products never cross a run boundary in the bias matrix", {
   # Two runs whose concatenation would create spurious lag-1 pairs at the seam.
   # Building A run by run must give the same answer as building it for each run
@@ -172,6 +189,29 @@ test_that("acvf_correction reproduces what design computes", {
   expect_equal(by_design$phi[[1]], by_bare$phi[[1]], tolerance = 1e-12)
 })
 
+test_that("the correction solver exposes success and fallback", {
+  truth <- c(2, 0.8, 0.3)
+  A <- matrix(c(0.8, 0.05, 0.01,
+                0.1, 0.9, 0.04,
+                0.02, 0.08, 0.85), 3L, 3L, byrow = TRUE)
+  raw <- as.numeric(A %*% truth)
+
+  good <- fmriAR:::.apply_acvf_correction_result(raw, A)
+  expect_true(good$applied)
+  expect_equal(good$gamma, truth, tolerance = 1e-12)
+
+  bad_A <- diag(c(1, 1e-8, 1e-12))
+  bad <- fmriAR:::.apply_acvf_correction_result(raw, bad_A)
+  expect_false(bad$applied)
+  expect_identical(bad$gamma, raw)
+
+  short_A <- A[1:2, 1:2]
+  tailed <- fmriAR:::.apply_acvf_correction_result(
+    c(as.numeric(short_A %*% truth[1:2]), 99), short_A)
+  expect_true(tailed$applied)
+  expect_equal(tailed$gamma, c(truth[1:2], 99), tolerance = 1e-12)
+})
+
 test_that("unsupported correction combinations are refused, not silently ignored", {
   set.seed(2)
   n <- 200L
@@ -243,6 +283,36 @@ test_that("correction still helps across runs and censoring", {
     expect_lt(abs(cor$phi[[1]][1] - phi), abs(raw$phi[[1]][1] - phi) + 1e-8, label = lbl)
     expect_lt(abs(cor$phi[[1]][1] - phi), 0.1, label = lbl)
     expect_true(all(is.finite(cor$gamma[[1]])), label = lbl)
+  }
+})
+
+test_that("run pooling applies the matching correction to every run", {
+  set.seed(6262)
+  n <- 200L
+  nvox <- 16L
+  runs <- rep(c("run-b", "run-a"), each = n / 2L)
+  phi <- c(0.5, 0.2)
+  X <- cbind(1, poly(seq_len(n), 3), matrix(rnorm(n * 8L), n, 8L))
+  M <- diag(n) - X %*% solve(crossprod(X), t(X))
+  E <- matrix(0, n, nvox)
+  for (v in seq_len(nvox)) {
+    for (r in unique(runs)) {
+      idx <- which(runs == r)
+      E[idx, v] <- as.numeric(stats::arima.sim(list(ar = phi), length(idx)))
+    }
+  }
+  R <- M %*% E
+
+  plan <- fit_noise(R, runs = runs, method = "ar", p = 2L, pooling = "run",
+                    design = X, correction_max_lag = 15L)
+  ac <- noise_acvf(R, runs = runs, max_lag = 6L, pooling = "run",
+                   design = X, correction_max_lag = 15L)
+
+  expect_named(plan$phi, c("run-b", "run-a"))
+  expect_true(ac$corrected)
+  for (k in names(plan$phi)) {
+    expect_equal(plan$phi[[k]], phi, tolerance = 0.18, info = k)
+    expect_equal(plan$gamma[[k]], ac$acvf[[k]], tolerance = 1e-12, info = k)
   }
 })
 

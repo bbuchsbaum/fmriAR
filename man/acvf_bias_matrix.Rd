@@ -4,14 +4,15 @@
 \alias{acvf_bias_matrix}
 \title{Bias matrix relating raw residual autocovariance to the truth}
 \usage{
-acvf_bias_matrix(design, runs = NULL, censor = NULL, max_lag = 20L)
+acvf_bias_matrix(design, runs = NULL, censor = NULL, max_lag = 25L)
 }
 \arguments{
 \item{design}{Numeric design matrix (timepoints x regressors), the one whose
 projection produced the residuals.}
 
-\item{runs}{Optional run labels, length \code{nrow(design)}. Lag products never
-cross a run boundary.}
+\item{runs}{Optional run labels, length \code{nrow(design)}. Each label must occupy
+one contiguous block and may not be missing. Lag products never cross a run
+boundary.}
 
 \item{censor}{Optional indices of censored timepoints (1-based), excluded
 exactly as in \code{\link[=fit_noise]{fit_noise()}}.}

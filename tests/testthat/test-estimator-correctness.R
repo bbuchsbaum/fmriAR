@@ -651,8 +651,10 @@ test_that("stationarity is enforced on every returned plan", {
         args <- list(resid = resid, method = "ar", p = "auto", p_max = 6L,
                      pooling = pooling, runs = runs, censor = cens)
         if (pooling == "parcel") args$parcels <- rep(1:2, length.out = 6L)
-        plan <- try(do.call(fmriAR::fit_noise, args), silent = TRUE)
-        if (inherits(plan, "try-error")) next
+        plan <- tryCatch(do.call(fmriAR::fit_noise, args), error = identity)
+        expect_false(inherits(plan, "error"),
+                     info = sprintf("fit failed: %s/%s seed %d", nm, pooling, s))
+        if (inherits(plan, "error")) next
         if (!is.null(plan$phi_by_parcel)) {
           for (ph in plan$phi_by_parcel) {
             expect_gt(min_root(ph), 1,
@@ -859,6 +861,16 @@ test_that("uncoercible parcel labels are refused at the boundary", {
   expect_match(err, "'A'")
   expect_match(err, "as.integer(factor(parcels))", fixed = TRUE)
   expect_false(grepl("invalid K", err, fixed = TRUE))
+  expect_error(
+    fmriAR::fit_noise(A, parcels = c(NA_integer_, rep(1:4, length.out = 15L)),
+                      pooling = "parcel", method = "ar", p = 2L),
+    "contains NA"
+  )
+  expect_error(
+    fmriAR::fit_noise(A, parcels = rep(c(1, 2.5), length.out = 16L),
+                      pooling = "parcel", method = "ar", p = 2L),
+    "whole-number"
+  )
 
   # Every other exported entry point that takes parcels refuses them too.
   expect_error(
