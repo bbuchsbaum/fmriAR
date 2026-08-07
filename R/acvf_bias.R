@@ -35,11 +35,7 @@
 
 # Run membership per original timepoint, as integer codes.
 .run_vector <- function(n, runs = NULL) {
-  n <- as.integer(n)
-  if (is.null(runs)) return(rep(1L, n))
-  if (length(runs) != n) stop("'runs' must have one entry per timepoint")
-  if (anyNA(runs)) stop("'runs' contains NA")
-  as.integer(match(runs, unique(runs)))
+  .run_codes(runs, n)
 }
 
 # S_k applied along the time axis to every row of B (each row an n-vector):
@@ -133,7 +129,7 @@
     max_lag <- capped
   }
 
-  Rsets <- if (is.null(runs)) list(seq_len(n)) else split(seq_len(n), as.integer(runs))
+  Rsets <- .run_sets(runs, n)
   cens <- if (is.null(censor)) integer(0) else as.integer(censor)
 
   setNames(lapply(Rsets, function(ridx) {
@@ -171,8 +167,9 @@
 #'
 #' @param design Numeric design matrix (timepoints x regressors), the one whose
 #'   projection produced the residuals.
-#' @param runs Optional run labels, length `nrow(design)`. Lag products never
-#'   cross a run boundary.
+#' @param runs Optional run labels, length `nrow(design)`. Each label must occupy
+#'   one contiguous block and may not be missing. Lag products never cross a run
+#'   boundary.
 #' @param censor Optional indices of censored timepoints (1-based), excluded
 #'   exactly as in [fit_noise()].
 #' @param max_lag Highest lag to correct.
@@ -185,7 +182,7 @@
 #' A <- acvf_bias_matrix(X, max_lag = 5)
 #' round(A[[1]][1:3, 1:3], 3)
 #' @export
-acvf_bias_matrix <- function(design, runs = NULL, censor = NULL, max_lag = 20L) {
+acvf_bias_matrix <- function(design, runs = NULL, censor = NULL, max_lag = 25L) {
   if (!is.matrix(design)) design <- as.matrix(design)
   .acvf_bias_by_run(design, nrow(design), runs = runs, censor = censor,
                     max_lag = max_lag)

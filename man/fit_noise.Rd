@@ -37,7 +37,8 @@ fit_noise(
 
 \item{X}{Optional design matrix used with \code{Y} to compute residuals.}
 
-\item{runs}{Optional integer vector of run identifiers.}
+\item{runs}{Optional run labels, one per timepoint. Each label must occupy one
+contiguous block and may not be missing.}
 
 \item{censor}{Optional integer vector of 1-based timepoint indices to exclude from
 AR parameter estimation, or a logical vector of length \code{nrow(resid)} where \code{TRUE}
