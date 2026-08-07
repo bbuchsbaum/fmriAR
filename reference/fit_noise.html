@@ -159,10 +159,19 @@ when computing autocorrelations. Each run's estimation uses only its own valid
     <p>An object of class <code>fmriAR_plan</code> used by <code><a href="whiten_apply.html">whiten_apply()</a></code>. Besides the
 AR/MA coefficients the plan carries the noise scale and shape it was fitted
 from, so consumers can reconstruct the covariance it implies rather than
-only its correlation structure:</p><ul><li><p><code>gamma</code>: list of autocovariance vectors (lags 0..p), one per pooling
-unit – a single entry for <code>pooling = "global"</code>, one per run for
-<code>pooling = "run"</code>.</p></li>
-<li><p><code>sigma2</code>: list of innovation variances, matching <code>gamma</code>.</p></li>
+only its correlation structure:</p><ul><li><p><code>gamma</code>: list of autocovariance vectors, one per pooling unit – a
+single entry for <code>pooling = "global"</code>, one per run for
+<code>pooling = "run"</code>. Lags run 0 to the highest the data supported, which
+is governed by <code>p_max</code> and the run length rather than by <code>p</code>, so
+<code>fit_noise(p = 1, p_max = 6)</code> returns seven values, not two. Under
+global pooling every run is truncated to the shortest available length
+before averaging, since a zero-padded autocovariance is not a valid
+covariance.</p></li>
+<li><p><code>sigma2</code>: list of innovation variances, matching <code>gamma</code>, derived
+as <code>gamma_0 - sum_k phi_k gamma_k</code> from the coefficients stored on the
+plan so the two are always mutually consistent. <code>NA</code> for
+<code>method = "arma"</code>, where no comparably cheap voxel-scale innovation
+variance is available.</p></li>
 <li><p><code>gamma_by_parcel</code>, <code>sigma2_by_parcel</code>: the same quantities per
 parcel when <code>pooling = "parcel"</code>, keyed like <code>phi_by_parcel</code>.</p></li>
 </ul><p>For a run-stationary noise process with autocovariance <code>gamma</code>, the

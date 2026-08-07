@@ -129,11 +129,20 @@ Besides the AR/MA coefficients the plan carries the noise scale and
 shape it was fitted from, so consumers can reconstruct the covariance it
 implies rather than only its correlation structure:
 
-- `gamma`: list of autocovariance vectors (lags 0..p), one per pooling
-  unit – a single entry for `pooling = "global"`, one per run for
-  `pooling = "run"`.
+- `gamma`: list of autocovariance vectors, one per pooling unit – a
+  single entry for `pooling = "global"`, one per run for
+  `pooling = "run"`. Lags run 0 to the highest the data supported, which
+  is governed by `p_max` and the run length rather than by `p`, so
+  `fit_noise(p = 1, p_max = 6)` returns seven values, not two. Under
+  global pooling every run is truncated to the shortest available length
+  before averaging, since a zero-padded autocovariance is not a valid
+  covariance.
 
-- `sigma2`: list of innovation variances, matching `gamma`.
+- `sigma2`: list of innovation variances, matching `gamma`, derived as
+  `gamma_0 - sum_k phi_k gamma_k` from the coefficients stored on the
+  plan so the two are always mutually consistent. `NA` for
+  `method = "arma"`, where no comparably cheap voxel-scale innovation
+  variance is available.
 
 - `gamma_by_parcel`, `sigma2_by_parcel`: the same quantities per parcel
   when `pooling = "parcel"`, keyed like `phi_by_parcel`.

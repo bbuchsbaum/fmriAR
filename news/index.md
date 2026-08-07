@@ -10,7 +10,14 @@
   `pooling = "parcel"`. Previously a plan recorded only the correlation
   structure, so two datasets differing 100-fold in variance produced
   identical plans and the magnitude of the noise was unrecoverable
-  without refitting. The addition is purely additive; existing fields
+  without refitting. `gamma` is reported at voxel scale for every
+  pooling mode, and `sigma2` is derived as
+  `gamma_0 - sum_k phi_k gamma_k` from the coefficients stored on the
+  plan, so the two are always mutually consistent. Under global pooling,
+  runs that reached different lags are truncated to the shortest before
+  averaging rather than zero-padded: a zero-padded autocovariance is not
+  a valid covariance, and building `Sigma` from one could yield negative
+  contrast variances. The addition is purely additive; existing fields
   are unchanged. For `method = "arma"`, `gamma` is the voxel-scale noise
   autocovariance pooled the same way as for AR, and `sigma2` is `NA`:
   Hannan-Rissanen’s own innovation variance is that of the run-mean
