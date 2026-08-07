@@ -11,7 +11,12 @@
   structure, so two datasets differing 100-fold in variance produced
   identical plans and the magnitude of the noise was unrecoverable
   without refitting. The addition is purely additive; existing fields
-  are unchanged.
+  are unchanged. For `method = "arma"`, `gamma` is the voxel-scale noise
+  autocovariance pooled the same way as for AR, and `sigma2` is `NA`:
+  Hannan-Rissanen’s own innovation variance is that of the run-mean
+  series, smaller than the per-voxel value by roughly the number of
+  voxels averaged, so reporting it would understate the noise by that
+  factor.
 
 ### Fixes
 

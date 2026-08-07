@@ -40,7 +40,7 @@
 <div class="section level3">
 <h3 id="new-0-3-3">New<a class="anchor" aria-label="anchor" href="#new-0-3-3"></a></h3>
 <ul><li>
-<code>fmriAR_plan</code> objects now carry the noise scale as well as its shape: <code>gamma</code> (autocovariance, lags 0..p) and <code>sigma2</code> (innovation variance) per pooling unit, plus <code>gamma_by_parcel</code> and <code>sigma2_by_parcel</code> for <code>pooling = "parcel"</code>. Previously a plan recorded only the correlation structure, so two datasets differing 100-fold in variance produced identical plans and the magnitude of the noise was unrecoverable without refitting. The addition is purely additive; existing fields are unchanged.</li>
+<code>fmriAR_plan</code> objects now carry the noise scale as well as its shape: <code>gamma</code> (autocovariance, lags 0..p) and <code>sigma2</code> (innovation variance) per pooling unit, plus <code>gamma_by_parcel</code> and <code>sigma2_by_parcel</code> for <code>pooling = "parcel"</code>. Previously a plan recorded only the correlation structure, so two datasets differing 100-fold in variance produced identical plans and the magnitude of the noise was unrecoverable without refitting. The addition is purely additive; existing fields are unchanged. For <code>method = "arma"</code>, <code>gamma</code> is the voxel-scale noise autocovariance pooled the same way as for AR, and <code>sigma2</code> is <code>NA</code>: Hannan-Rissanen’s own innovation variance is that of the run-mean series, smaller than the per-voxel value by roughly the number of voxels averaged, so reporting it would understate the noise by that factor.</li>
 </ul></div>
 <div class="section level3">
 <h3 id="fixes-0-3-3">Fixes<a class="anchor" aria-label="anchor" href="#fixes-0-3-3"></a></h3>
