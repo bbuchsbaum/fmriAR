@@ -505,14 +505,25 @@ test_that("enforce_stationary_ar returns roots strictly outside the unit circle"
   # Clamping reflection coefficients bounds each |kappa| < 1 but at high order
   # leaves the roots on the unit circle: PACF 0.99 repeated ten times gave
   # coefficients above 45 with min|root| equal to 1 to machine precision.
+  # `> 1` alone does not bite: clamping the reflection coefficients leaves
+  # min|root| at 1.0000000000, which still compares greater than 1 in floating
+  # point. Assert the margin the function actually promises.
+  margin <- 1e-6
   cases <- list(rep(0.99, 10), rep(0.99, 6), rep(0.9, 3), c(0.5, 0.3),
-                c(1.9, -0.99), rep(0.999, 4))
+                c(1.9, -0.99), rep(0.999, 4), rep(0.95, 8))
+  checked <- 0L
   for (v in cases) {
     out <- fmriAR:::enforce_stationary_ar(v, 0.99)
-    if (!length(out)) next          # refusing is an acceptable outcome
+    if (!length(out)) next          # refusing to produce a filter is acceptable
+    checked <- checked + 1L
     expect_true(all(is.finite(out)))
-    expect_gt(min(Mod(polyroot(c(1, -out)))), 1)
+    expect_gt(min(Mod(polyroot(c(1, -out)))), 1 + margin / 2)
   }
+  expect_gt(checked, 0L)
+
+  # The clamp alone is not sufficient, which is what makes the shrink load-bearing.
+  clamp_only <- fmriAR:::pacf_to_ar(pmin(pmax(fmriAR:::ar_to_pacf(rep(0.99, 6)), -0.99), 0.99))
+  expect_lt(min(Mod(polyroot(c(1, -clamp_only)))), 1 + margin / 2)
 })
 
 test_that("degenerate order requests fail cleanly rather than opaquely", {

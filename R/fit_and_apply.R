@@ -116,6 +116,13 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
   list(num = num, pairs = pairs)
 }
 
+# Highest lag with any contributing pairs; -1 when the pooled acvf is empty.
+.acvf_max_lag <- function(pooled) {
+  usable <- which(pooled$pairs > 0)
+  if (!length(usable)) return(-1L)
+  max(usable) - 1L
+}
+
 # Positive definite with a strict relative margin, not merely non-negative.
 # Sitting on the cone boundary makes a reflection coefficient exactly +/-1, which
 # drives the Levinson prediction error to the 1e-12 floor; BIC then reads that as
@@ -132,13 +139,15 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 }
 
 # Prefer the pair-count (unbiased) normalization, which is not attenuated when
-# censoring thins the pairs available at each lag. Fall back only as far toward
-# the PSD-safe common-divisor form as needed to make the Toeplitz matrix PSD,
-# since Yule-Walker on a non-PSD acvf returns explosive coefficients.
-.acvf_from_pooled <- function(pooled, order = NULL, tol = 1e-10) {
+# censoring thins the pairs available at each lag. Where that is not positive
+# definite, shrink the non-zero lags toward white noise only as far as needed,
+# since Yule-Walker on a non-PD acvf returns explosive coefficients.
+.acvf_from_pooled <- function(pooled, order = NULL, tol = 1e-6) {
   num <- pooled$num
   pairs <- pooled$pairs
-  avail <- max(which(pairs > 0))
+  usable <- which(pairs > 0)
+  if (!length(usable)) return(numeric(0))
+  avail <- max(usable)
   # Correct only the Toeplitz matrix actually being inverted. Fragmented data
   # leaves few pairs at long lags, so those entries are noisy and frequently
   # break PSD; shrinking the whole vector to repair them attenuates the short
@@ -208,7 +217,7 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
   if (!length(gamma0) || !is.finite(gamma0[1]) || gamma0[1] <= 0) {
     return(list(phi = numeric(0), order = c(p = 0L, q = 0L)))
   }
-  p_cap <- min(p_cap, max(which(pooled$pairs > 0)) - 1L)
+  p_cap <- min(p_cap, .acvf_max_lag(pooled))
   if (p_cap < 1L) return(list(phi = numeric(0), order = c(p = 0L, q = 0L)))
 
   # PSD-correct at the order being fitted, not at p_max.
@@ -441,7 +450,7 @@ fit_noise <- function(resid = NULL,
       if (!length(gamma0) || !is.finite(gamma0[1]) || gamma0[1] <= 0) {
         return(list(phi = numeric(0), theta = numeric(0), order = c(p = 0L, q = 0L)))
       }
-      p_cap <- min(p_cap, max(which(pooled$pairs > 0)) - 1L)
+      p_cap <- min(p_cap, .acvf_max_lag(pooled))
       if (p_cap < 1L) {
         return(list(phi = numeric(0), theta = numeric(0), order = c(p = 0L, q = 0L)))
       }
