@@ -34,9 +34,15 @@ rather than errors. Analyses run with `pooling = "parcel"` or with
   Yule-Walker paths, which previously returned raw coefficients with no
   stationarity check.
 
-- The autocovariance is now positive semi-definite by construction: the
-  unbiased pair-count normalization is retained where it is valid and
-  shrunk toward the common-divisor form only as far as needed.
+- The autocovariance is now positive definite by construction. The
+  unbiased pair-count normalization is retained wherever it is valid,
+  and otherwise the non-zero lags are shrunk toward white noise only as
+  far as needed. Positive definiteness is required with a relative
+  margin rather than mere non-negativity: on the boundary a reflection
+  coefficient is exactly 1, which collapses the Levinson prediction
+  error to its floor, and BIC reads that as a perfect fit and selects
+  the maximum order. The resulting filters amplified variance under
+  censoring instead of whitening.
 
 - `pooling = "parcel"` now honours `censor`, which was previously
   discarded internally, and no longer estimates across run boundaries.
@@ -74,13 +80,6 @@ rather than errors. Analyses run with `pooling = "parcel"` or with
 - Combining `parcel_sets` with `censor` no longer fails with “incorrect
   length for ‘group’”.
 
-- The autocovariance is made positive definite with a margin rather than
-  merely non-negative. Landing on the boundary set a reflection
-  coefficient to exactly 1, collapsing the Levinson prediction error to
-  its floor, which BIC read as a perfect fit and used to select the
-  maximum order; the resulting filters amplified variance under
-  censoring.
-
 - `enforce_stationary_ar()` now guarantees characteristic roots strictly
   outside the unit circle. Clamping reflection coefficients alone left
   the roots on the circle at high order.
@@ -91,6 +90,12 @@ rather than errors. Analyses run with `pooling = "parcel"` or with
 
 - `p_max` at or near the series length no longer fails with “missing
   value where TRUE/FALSE needed”.
+
+- [`whiten_apply()`](https://bbuchsbaum.github.io/fmriAR/reference/whiten_apply.md)
+  validates `runs`: a length mismatch was silently recycled by
+  [`split()`](https://rdrr.io/r/base/split.html) and an `NA` left that
+  row unwritten in both `X` and `Y`. Both now raise an error, and
+  character run labels are accepted.
 
 - `compat$plan_from_phi()` works with its documented default
   `theta = NULL` for global and run pooling. It previously reported an
