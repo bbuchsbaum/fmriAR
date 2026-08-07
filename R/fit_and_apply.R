@@ -889,7 +889,7 @@ fit_noise <- function(resid = NULL,
       parents <- .ms_parent_maps(parcels_fine, parcels_medium, parcels_coarse)
       sizes <- list(
         n_t = nrow(resid),
-        n_runs = if (is.null(runs)) 1L else length(unique(as.integer(runs))),
+        n_runs = length(unique(.run_codes(runs, n))),
         beta = beta,
         coarse = as.list(table(parcels_coarse)),
         medium = as.list(table(parcels_medium)),
