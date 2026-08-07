@@ -39,7 +39,6 @@ compat_funcs <- compat
 # Example: Create whitening plan from AR coefficients
 phi <- c(0.3, 0.1)  # AR(2) coefficients
 plan <- compat_funcs$plan_from_phi(phi, exact_first = TRUE)
-#> Warning: no non-missing arguments to max; returning -Inf
 
 # Example: Compute whiteness score
 resid <- matrix(rnorm(100 * 10), 100, 10)

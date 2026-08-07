@@ -92,6 +92,14 @@ rather than errors. Analyses run with `pooling = "parcel"` or with
 - `p_max` at or near the series length no longer fails with “missing
   value where TRUE/FALSE needed”.
 
+- `compat$plan_from_phi()` works with its documented default
+  `theta = NULL` for global and run pooling. It previously reported an
+  MA order of `-Inf` and produced a plan that
+  [`whiten_apply()`](https://bbuchsbaum.github.io/fmriAR/reference/whiten_apply.md)
+  rejected with “subscript out of bounds” – the plan built by the
+  example in
+  [`?compat`](https://bbuchsbaum.github.io/fmriAR/reference/compat.md).
+
 ## fmriAR 0.3.2
 
 CRAN release: 2026-04-15
