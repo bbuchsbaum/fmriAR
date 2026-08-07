@@ -90,10 +90,50 @@ rather than errors. Analyses run with `pooling = "parcel"` or with
   [`noise_acvf()`](https://bbuchsbaum.github.io/fmriAR/reference/noise_acvf.md).
 
 - Run labels are validated and encoded consistently across fitting, ACVF
-  estimation, bias correction, and whitening. Wrong-length vectors,
-  missing labels, and labels reused in non-contiguous blocks now fail at
-  the boundary instead of recycling or silently dropping timepoints;
-  contiguous character labels are supported.
+  estimation, bias correction, whitening,
+  [`acorr_diagnostics()`](https://bbuchsbaum.github.io/fmriAR/reference/acorr_diagnostics.md),
+  and
+  [`afni_restricted_plan()`](https://bbuchsbaum.github.io/fmriAR/reference/afni_restricted_plan.md).
+  Wrong-length vectors, missing labels, and labels reused in
+  non-contiguous blocks now fail at the boundary instead of recycling or
+  silently dropping timepoints; contiguous character labels are
+  supported. Previously
+  [`acorr_diagnostics()`](https://bbuchsbaum.github.io/fmriAR/reference/acorr_diagnostics.md)
+  coerced character labels to `NA` and silently ignored the run split,
+  and
+  [`afni_restricted_plan()`](https://bbuchsbaum.github.io/fmriAR/reference/afni_restricted_plan.md)
+  ordered its run starts by sorted label rather than by time, so runs
+  labelled out of time order produced descending starts.
+
+- Under global pooling, a run censored down to one or zero surviving
+  frames no longer erases the pooled autocovariance. Such a run carries
+  no `gamma` of its own; it previously set the common truncation length
+  to zero, so the plan reported `gamma` of length 0 and `sigma2 = NA`
+  for the whole fit even though `phi` was pooled correctly and
+  [`noise_acvf()`](https://bbuchsbaum.github.io/fmriAR/reference/noise_acvf.md)
+  returned the full answer.
+
+- [`fit_noise()`](https://bbuchsbaum.github.io/fmriAR/reference/fit_noise.md)
+  rejects residuals containing `NA`, `NaN`, or `Inf`, matching
+  [`noise_acvf()`](https://bbuchsbaum.github.io/fmriAR/reference/noise_acvf.md).
+  It previously returned an order-0 plan with empty coefficients, which
+  [`whiten_apply()`](https://bbuchsbaum.github.io/fmriAR/reference/whiten_apply.md)
+  accepted and applied as a no-op.
+
+- Lag budgets are validated the same way in
+  [`fit_noise()`](https://bbuchsbaum.github.io/fmriAR/reference/fit_noise.md)
+  and
+  [`noise_acvf()`](https://bbuchsbaum.github.io/fmriAR/reference/noise_acvf.md):
+  both reject a non-finite or non-positive `correction_max_lag`
+  ([`fit_noise()`](https://bbuchsbaum.github.io/fmriAR/reference/fit_noise.md)
+  used to clamp silently to 1), and budgets past the series length are
+  clamped to it rather than overflowing integer coercion into an
+  unrelated error.
+
+- [`noise_acvf()`](https://bbuchsbaum.github.io/fmriAR/reference/noise_acvf.md)
+  under `pooling = "global"` keys its single pooled unit as `"1"` even
+  when only one run survives censoring; it previously leaked the
+  surviving run’s label into the name.
 
 - [`noise_acvf()`](https://bbuchsbaum.github.io/fmriAR/reference/noise_acvf.md)
   now has a separate `correction_max_lag` argument (default 25),

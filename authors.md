@@ -2,9 +2,12 @@
 
 ## Authors
 
-- **Bradley Buchsbaum**. Author, maintainer.
+- **Bradley Buchsbaum**. Author, maintainer, copyright holder.
 
 ## Citation
+
+Source:
+[`DESCRIPTION`](https://github.com/bbuchsbaum/fmriAR/blob/main/DESCRIPTION)
 
 Buchsbaum B (2026). *fmriAR: Fast AR and ARMA Noise Whitening for
 Functional MRI (fMRI) Design and Data*. R package version 0.3.3,
