@@ -1,5 +1,17 @@
 # fmriAR 0.3.3
 
+## New
+
+* `fmriAR_plan` objects now carry the noise scale as well as its shape:
+  `gamma` (autocovariance, lags 0..p) and `sigma2` (innovation variance) per
+  pooling unit, plus `gamma_by_parcel` and `sigma2_by_parcel` for
+  `pooling = "parcel"`. Previously a plan recorded only the correlation
+  structure, so two datasets differing 100-fold in variance produced identical
+  plans and the magnitude of the noise was unrecoverable without refitting.
+  The addition is purely additive; existing fields are unchanged.
+
+## Fixes
+
 This release fixes several defects that silently produced wrong results rather
 than errors. Analyses run with `pooling = "parcel"` or with `censor` under 0.3.2
 should be rerun.

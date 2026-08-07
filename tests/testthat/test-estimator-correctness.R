@@ -684,3 +684,68 @@ test_that("ARMA warns rather than silently biasing across censoring gaps", {
     fmriAR::fit_noise(resid, method = "arma", p = 1L, q = 1L, pooling = "global")
   )
 })
+
+
+# --- Noise scale on the plan --------------------------------------------------
+
+test_that("the plan carries the noise scale, not just its shape", {
+  # Regression guard: the plan recorded only correlation structure, so two
+  # datasets differing 100-fold in variance produced bit-identical plans and
+  # the magnitude of the noise was unrecoverable.
+  A <- ar_sim(400L, 0.5, nvox = 20L, seed = 3301)
+  B <- A * 10
+
+  pa <- fmriAR::fit_noise(A, pooling = "global", method = "ar", p = 1L)
+  pb <- fmriAR::fit_noise(B, pooling = "global", method = "ar", p = 1L)
+
+  expect_false(isTRUE(all.equal(unclass(pa), unclass(pb))))
+  expect_equal(plan_phi(pa), plan_phi(pb), tolerance = 1e-8)   # same shape
+  expect_equal(pb$sigma2[[1]] / pa$sigma2[[1]], 100, tolerance = 1e-6)
+  expect_equal(pb$gamma[[1]][1] / pa$gamma[[1]][1], 100, tolerance = 1e-6)
+})
+
+test_that("sigma2 and gamma agree with the data they were fitted from", {
+  phi <- 0.6
+  A <- ar_sim(4000L, phi, nvox = 30L, seed = 3401)
+  plan <- fmriAR::fit_noise(A, pooling = "global", method = "ar", p = 1L)
+
+  # gamma[1] is the marginal variance; sigma2 the innovation variance.
+  expect_equal(plan$gamma[[1]][1], mean(apply(A, 2L, stats::var)), tolerance = 0.05)
+  expect_equal(plan$sigma2[[1]], plan$gamma[[1]][1] * (1 - phi^2), tolerance = 0.05)
+  # gamma[h] / gamma[0] should follow phi^h.
+  expect_equal(plan$gamma[[1]][2] / plan$gamma[[1]][1], phi, tolerance = 0.05)
+  expect_equal(plan$gamma[[1]][3] / plan$gamma[[1]][1], phi^2, tolerance = 0.05)
+})
+
+test_that("every pooling mode reports a scale keyed like its coefficients", {
+  A <- ar_sim(300L, 0.5, nvox = 20L, seed = 3501)
+  parcels <- rep(1:4, length.out = 20L)
+
+  g <- fmriAR::fit_noise(A, pooling = "global", method = "ar", p = 1L)
+  expect_length(g$gamma, 1L)
+  expect_length(g$sigma2, 1L)
+  expect_true(is.finite(g$sigma2[[1]]) && g$sigma2[[1]] > 0)
+
+  r <- fmriAR::fit_noise(A, runs = rep(1:3, each = 100L), pooling = "run",
+                         method = "ar", p = 1L)
+  expect_length(r$gamma, 3L)
+  expect_length(r$sigma2, 3L)
+  expect_true(all(vapply(r$sigma2, function(z) is.finite(z) && z > 0, logical(1))))
+
+  p <- fmriAR::fit_noise(A, parcels = parcels, pooling = "parcel",
+                         method = "ar", p = 1L)
+  expect_equal(names(p$sigma2_by_parcel), names(p$phi_by_parcel))
+  expect_equal(names(p$gamma_by_parcel), names(p$phi_by_parcel))
+  expect_true(all(vapply(p$sigma2_by_parcel,
+                         function(z) is.finite(z) && z > 0, logical(1))))
+})
+
+test_that("the reported gamma reconstructs a valid noise covariance", {
+  A <- ar_sim(600L, c(0.6, 0.2), nvox = 20L, seed = 3601)
+  plan <- fmriAR::fit_noise(A, pooling = "global", method = "ar", p = 3L)
+  g <- plan$gamma[[1]]
+
+  Sigma <- stats::toeplitz(g)
+  expect_gt(min(eigen(Sigma, symmetric = TRUE, only.values = TRUE)$values), 0)
+  expect_equal(nrow(Sigma), length(g))
+})

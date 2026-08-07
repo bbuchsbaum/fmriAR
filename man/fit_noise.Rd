@@ -74,7 +74,22 @@ when computing autocorrelations. Each run's estimation uses only its own valid
 \item{parallel}{Reserved for future parallel estimation (logical).}
 }
 \value{
-An object of class \code{fmriAR_plan} used by \code{\link[=whiten_apply]{whiten_apply()}}.
+An object of class \code{fmriAR_plan} used by \code{\link[=whiten_apply]{whiten_apply()}}. Besides the
+AR/MA coefficients the plan carries the noise scale and shape it was fitted
+from, so consumers can reconstruct the covariance it implies rather than
+only its correlation structure:
+\itemize{
+\item \code{gamma}: list of autocovariance vectors (lags 0..p), one per pooling
+unit -- a single entry for \code{pooling = "global"}, one per run for
+\code{pooling = "run"}.
+\item \code{sigma2}: list of innovation variances, matching \code{gamma}.
+\item \code{gamma_by_parcel}, \code{sigma2_by_parcel}: the same quantities per
+parcel when \code{pooling = "parcel"}, keyed like \code{phi_by_parcel}.
+}
+For a run-stationary noise process with autocovariance \code{gamma}, the
+covariance of the data within a run is the Toeplitz matrix built from it,
+which is what makes design-specific variance calculations possible
+downstream without refitting.
 }
 \description{
 Fit an AR/ARMA noise model (run-aware) and return a whitening plan

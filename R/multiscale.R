@@ -123,9 +123,11 @@
 
   phi_by <- setNames(vector("list", length(ids)), ids)
   acvf_by <- setNames(vector("list", length(ids)), ids)
+  sigma2_by <- setNames(vector("list", length(ids)), ids)
   for (id in ids) {
     fit <- estimator(M[, id])
     phi_by[[id]] <- fit$phi
+    sigma2_by[[id]] <- if (is.null(fit$sigma2)) NA_real_ else fit$sigma2
     lag_id <- max(as.integer(lag_max), fit$order[["p"]], 1L)
     # segmented_acvf_cpp centres each segment on its own mean. Once censoring
     # splits a run into short fragments that destroys the autocorrelation being
@@ -136,5 +138,5 @@
                                     center_id = center_id)
     acvf_by[[id]] <- .acvf_from_pooled(pooled, order = lag_id)
   }
-  list(phi = phi_by, acvf = acvf_by)
+  list(phi = phi_by, acvf = acvf_by, sigma2 = sigma2_by)
 }

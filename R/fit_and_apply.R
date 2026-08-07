@@ -19,7 +19,9 @@
 new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, pooling,
                             parcels = NULL, parcel_ids = NULL,
                             phi_by_parcel = NULL, theta_by_parcel = NULL,
-                            censor = NULL) {
+                            censor = NULL,
+                            gamma = NULL, sigma2 = NULL,
+                            gamma_by_parcel = NULL, sigma2_by_parcel = NULL) {
   structure(
     list(
       phi = phi,
@@ -33,7 +35,15 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
       parcel_ids = parcel_ids,
       phi_by_parcel = phi_by_parcel,
       theta_by_parcel = theta_by_parcel,
-      censor = censor
+      censor = censor,
+      # Noise scale and shape. Without these a plan describes the correlation
+      # structure but not its magnitude, so a consumer cannot recover the
+      # covariance the plan implies -- two datasets differing 100-fold in
+      # variance produced identical plans.
+      gamma = gamma,
+      sigma2 = sigma2,
+      gamma_by_parcel = gamma_by_parcel,
+      sigma2_by_parcel = sigma2_by_parcel
     ),
     class = "fmriAR_plan"
   )
@@ -208,17 +218,22 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 
   seg_len <- diff(c(starts0, n))
   p_cap <- min(as.integer(p_max), max(seg_len) - 1L, n - 1L)
-  if (p_cap < 1L) return(list(phi = numeric(0), order = c(p = 0L, q = 0L)))
+  empty <- list(phi = numeric(0), order = c(p = 0L, q = 0L),
+                gamma = numeric(0), sigma2 = NA_real_)
+  if (p_cap < 1L) return(empty)
 
   seg_id <- cumsum(seq_len(n) %in% (starts0 + 1L))
   pooled <- .pooled_acvf_segments(matrix(y, ncol = 1L), seg_id, p_cap,
                                   center_id = center_id)
   gamma0 <- .acvf_from_pooled(pooled, order = 0L)
-  if (!length(gamma0) || !is.finite(gamma0[1]) || gamma0[1] <= 0) {
-    return(list(phi = numeric(0), order = c(p = 0L, q = 0L)))
-  }
+  if (!length(gamma0) || !is.finite(gamma0[1]) || gamma0[1] <= 0) return(empty)
   p_cap <- min(p_cap, .acvf_max_lag(pooled))
-  if (p_cap < 1L) return(list(phi = numeric(0), order = c(p = 0L, q = 0L)))
+  if (p_cap < 1L) {
+    empty$gamma <- gamma0
+    empty$sigma2 <- gamma0[1]
+    return(empty)
+  }
+  gamma_full <- .acvf_from_pooled(pooled, order = p_cap)
 
   # PSD-correct at the order being fitted, not at p_max.
   fit_order <- function(pp) {
@@ -230,8 +245,14 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 
   if (!identical(p, "auto")) {
     pp <- min(as.integer(p), p_cap)
-    if (pp <= 0L) return(list(phi = numeric(0), order = c(p = 0L, q = 0L)))
-    return(list(phi = fit_order(pp)$phi, order = c(p = pp, q = 0L)))
+    if (pp <= 0L) {
+      empty$gamma <- gamma_full
+      empty$sigma2 <- gamma_full[1]
+      return(empty)
+    }
+    f <- fit_order(pp)
+    return(list(phi = f$phi, order = c(p = pp, q = 0L),
+                gamma = gamma_full, sigma2 = f$sigma2))
   }
 
   # Cap the order BIC may select by the data available. Selection on a handful
@@ -241,16 +262,19 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
   p_sel <- min(p_cap, floor(n / 5))
   n_log <- log(n)
   best <- list(bic = 2 * n * log(pmax(gamma0[1], 1e-12)) + n_log,
-               phi = numeric(0), p = 0L)
+               phi = numeric(0), p = 0L, sigma2 = gamma0[1])
   for (pp in seq_len(max(0L, p_sel))) {
     f <- fit_order(pp)
     # enforce_stationary_ar() returns length 0 when it cannot produce a
     # stationary filter, which must not be recorded as an order-pp fit.
     if (!is.finite(f$sigma2) || length(f$phi) != pp || !all(is.finite(f$phi))) next
     bic <- 2 * n * log(f$sigma2) + (pp + 1L) * n_log
-    if (is.finite(bic) && bic < best$bic) best <- list(bic = bic, phi = f$phi, p = pp)
+    if (is.finite(bic) && bic < best$bic) {
+      best <- list(bic = bic, phi = f$phi, p = pp, sigma2 = f$sigma2)
+    }
   }
-  list(phi = best$phi, order = c(p = best$p, q = 0L))
+  list(phi = best$phi, order = c(p = best$p, q = 0L),
+       gamma = gamma_full, sigma2 = best$sigma2)
 }
 
 .full_run_starts <- function(runs, censor, n) {
@@ -311,7 +335,22 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 #' @param hr_iter Number of Hannan--Rissanen refinement iterations for ARMA.
 #' @param step1 Preliminary high-order AR fit method for HR ("burg" or "yw").
 #' @param parallel Reserved for future parallel estimation (logical).
-#' @return An object of class `fmriAR_plan` used by [whiten_apply()].
+#' @return An object of class `fmriAR_plan` used by [whiten_apply()]. Besides the
+#'   AR/MA coefficients the plan carries the noise scale and shape it was fitted
+#'   from, so consumers can reconstruct the covariance it implies rather than
+#'   only its correlation structure:
+#'   \itemize{
+#'     \item `gamma`: list of autocovariance vectors (lags 0..p), one per pooling
+#'       unit -- a single entry for `pooling = "global"`, one per run for
+#'       `pooling = "run"`.
+#'     \item `sigma2`: list of innovation variances, matching `gamma`.
+#'     \item `gamma_by_parcel`, `sigma2_by_parcel`: the same quantities per
+#'       parcel when `pooling = "parcel"`, keyed like `phi_by_parcel`.
+#'   }
+#'   For a run-stationary noise process with autocovariance `gamma`, the
+#'   covariance of the data within a run is the Toeplitz matrix built from it,
+#'   which is what makes design-specific variance calculations possible
+#'   downstream without refitting.
 #' @examples
 #' # Generate example data with AR(1) structure
 #' n_time <- 200
@@ -447,23 +486,24 @@ fit_noise <- function(resid = NULL,
       seg_id <- cumsum(c(1L, as.integer(diff(valid_idx) > 1L)))
       pooled <- .pooled_acvf_segments(mat[valid_idx, , drop = FALSE], seg_id, p_cap)
       gamma0 <- .acvf_from_pooled(pooled, order = 0L)
-      if (!length(gamma0) || !is.finite(gamma0[1]) || gamma0[1] <= 0) {
-        return(list(phi = numeric(0), theta = numeric(0), order = c(p = 0L, q = 0L)))
-      }
+      null_fit <- list(phi = numeric(0), theta = numeric(0),
+                       order = c(p = 0L, q = 0L),
+                       gamma = gamma0, sigma2 = if (length(gamma0)) gamma0[1] else NA_real_)
+      if (!length(gamma0) || !is.finite(gamma0[1]) || gamma0[1] <= 0) return(null_fit)
       p_cap <- min(p_cap, .acvf_max_lag(pooled))
-      if (p_cap < 1L) {
-        return(list(phi = numeric(0), theta = numeric(0), order = c(p = 0L, q = 0L)))
-      }
+      if (p_cap < 1L) return(null_fit)
+      gamma_full <- .acvf_from_pooled(pooled, order = p_cap)
+      null_fit$gamma <- gamma_full
+      null_fit$sigma2 <- gamma_full[1]
 
       if (!identical(p, "auto")) {
         pp <- min(as.integer(p), p_cap)
-        if (pp <= 0L) {
-          return(list(phi = numeric(0), theta = numeric(0), order = c(p = 0L, q = 0L)))
-        }
+        if (pp <= 0L) return(null_fit)
         gamma_pp <- .acvf_from_pooled(pooled, order = pp)
         yw <- yw_from_acvf_fast(gamma_pp[seq_len(pp + 1L)], pp)
         return(list(phi = enforce_stationary_ar(yw$phi, 0.99),
-                    theta = numeric(0), order = c(p = pp, q = 0L)))
+                    theta = numeric(0), order = c(p = pp, q = 0L),
+                    gamma = gamma_full, sigma2 = pmax(yw$sigma2, 1e-12)))
       }
 
       best_phi <- numeric(0)
@@ -471,6 +511,7 @@ fit_noise <- function(resid = NULL,
       n_eff_log <- log(n_eff)
       sigma0 <- pmax(gamma0[1], 1e-12)
       best_bic <- 2 * n_eff * log(sigma0) + n_eff_log
+      best_sigma2 <- sigma0
       # Bound the order BIC may select by available data; an explicit p is honoured.
       p_sel <- min(p_cap, floor(n_eff / 5))
       if (p_cap >= 1L) {
@@ -486,9 +527,11 @@ fit_noise <- function(resid = NULL,
           best_bic <- bic
           best_phi <- phi_pp
           best_order <- c(p = pp, q = 0L)
+          best_sigma2 <- sigma2
         }
       }
-      list(phi = best_phi, theta = numeric(0), order = best_order)
+      list(phi = best_phi, theta = numeric(0), order = best_order,
+           gamma = gamma_full, sigma2 = best_sigma2)
     } else {
       # For ARMA: use valid timepoints only.
       #
@@ -643,6 +686,10 @@ fit_noise <- function(resid = NULL,
     theta_parcel <- setNames(vector("list", length(phi_parcel)), names(phi_parcel))
     order_vec <- c(p = keep, q = 0L)
 
+    # Per-parcel noise scale and shape, keyed like phi_by_parcel.
+    gamma_parcel <- est_f$acvf[names(phi_parcel)]
+    sigma2_parcel <- est_f$sigma2[names(phi_parcel)]
+
     parcel_ids <- names(phi_parcel)
     if (is.null(parcel_ids)) parcel_ids <- as.character(sort(unique(parcels)))
     return(new_whiten_plan(
@@ -657,7 +704,9 @@ fit_noise <- function(resid = NULL,
       parcel_ids = parcel_ids,
       phi_by_parcel = phi_parcel,
       theta_by_parcel = theta_parcel,
-      censor = censor
+      censor = censor,
+      gamma_by_parcel = gamma_parcel,
+      sigma2_by_parcel = sigma2_parcel
     ))
   }
 
@@ -684,9 +733,21 @@ fit_noise <- function(resid = NULL,
     if (length(theta_pooled)) theta_pooled <- enforce_invertible_ma(theta_pooled)
     phi_list <- list(phi_pooled)
     theta_list <- list(theta_pooled)
+    # Pool the noise scale the same length-weighted way as the coefficients.
+    gmax <- max(vapply(estimates, function(e) length(e$gamma %||% numeric(0)), 0L))
+    G <- matrix(0, length(estimates), max(gmax, 1L))
+    for (i in seq_along(estimates)) {
+      gi <- estimates[[i]]$gamma
+      if (length(gi)) G[i, seq_along(gi)] <- gi
+    }
+    gamma_list <- list(as.numeric(drop(crossprod(w, G))))
+    sigma2_list <- list(sum(w * vapply(estimates,
+      function(e) if (is.null(e$sigma2)) NA_real_ else e$sigma2, numeric(1))))
   } else {
     phi_list <- lapply(estimates, `[[`, "phi")
     theta_list <- lapply(estimates, `[[`, "theta")
+    gamma_list <- lapply(estimates, function(e) e$gamma %||% numeric(0))
+    sigma2_list <- lapply(estimates, function(e) e$sigma2 %||% NA_real_)
   }
 
   order_vec <- if (pooling == "global") {
@@ -703,7 +764,9 @@ fit_noise <- function(resid = NULL,
     exact_first = (exact_first == "ar1"),
     method = method,
     pooling = pooling,
-    censor = censor
+    censor = censor,
+    gamma = gamma_list,
+    sigma2 = sigma2_list
   )
 }
 
