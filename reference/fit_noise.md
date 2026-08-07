@@ -125,6 +125,23 @@ fit_noise(
 
 An object of class `fmriAR_plan` used by
 [`whiten_apply()`](https://bbuchsbaum.github.io/fmriAR/reference/whiten_apply.md).
+Besides the AR/MA coefficients the plan carries the noise scale and
+shape it was fitted from, so consumers can reconstruct the covariance it
+implies rather than only its correlation structure:
+
+- `gamma`: list of autocovariance vectors (lags 0..p), one per pooling
+  unit – a single entry for `pooling = "global"`, one per run for
+  `pooling = "run"`.
+
+- `sigma2`: list of innovation variances, matching `gamma`.
+
+- `gamma_by_parcel`, `sigma2_by_parcel`: the same quantities per parcel
+  when `pooling = "parcel"`, keyed like `phi_by_parcel`.
+
+For a run-stationary noise process with autocovariance `gamma`, the
+covariance of the data within a run is the Toeplitz matrix built from
+it, which is what makes design-specific variance calculations possible
+downstream without refitting.
 
 ## Examples
 

@@ -37,6 +37,13 @@
 
     <div class="section level2">
 <h2 class="pkg-version" data-toc-text="0.3.3" id="fmriar-033">fmriAR 0.3.3<a class="anchor" aria-label="anchor" href="#fmriar-033"></a></h2>
+<div class="section level3">
+<h3 id="new-0-3-3">New<a class="anchor" aria-label="anchor" href="#new-0-3-3"></a></h3>
+<ul><li>
+<code>fmriAR_plan</code> objects now carry the noise scale as well as its shape: <code>gamma</code> (autocovariance, lags 0..p) and <code>sigma2</code> (innovation variance) per pooling unit, plus <code>gamma_by_parcel</code> and <code>sigma2_by_parcel</code> for <code>pooling = "parcel"</code>. Previously a plan recorded only the correlation structure, so two datasets differing 100-fold in variance produced identical plans and the magnitude of the noise was unrecoverable without refitting. The addition is purely additive; existing fields are unchanged.</li>
+</ul></div>
+<div class="section level3">
+<h3 id="fixes-0-3-3">Fixes<a class="anchor" aria-label="anchor" href="#fixes-0-3-3"></a></h3>
 <p>This release fixes several defects that silently produced wrong results rather than errors. Analyses run with <code>pooling = "parcel"</code> or with <code>censor</code> under 0.3.2 should be rerun.</p>
 <ul><li><p>Fixed order selection for <code>pooling = "parcel"</code>. The innovation sequence used to score BIC was built with a feedback filter rather than the intended FIR filter, which inflated the variance at every order and made order 0 always win. The effect was that parcel pooling returned all-zero AR coefficients: <code><a href="../reference/whiten_apply.html">whiten_apply()</a></code> returned its inputs unchanged while the plan reported a non-zero order. Order selection now scores the Levinson-Durbin prediction error, matching the global and run paths.</p></li>
 <li><p>Fixed AR estimation under censoring. Each scrubbing fragment was centred on its own mean, which removes the autocorrelation being measured – a two-frame fragment yields a lag-1 correlation of exactly -1 regardless of the data. The estimate was attenuated toward zero as censoring increased (a true phi of 0.6 was recovered as approximately 0 at 40% censoring) and the pooled autocovariance could lose positive semi-definiteness, so <code><a href="../reference/fit_noise.html">fit_noise()</a></code> returned non-stationary coefficients and <code><a href="../reference/whiten_apply.html">whiten_apply()</a></code> then amplified variance instead of whitening. The mean is now estimated per run, while lag products remain confined to contiguous valid segments.</p></li>
@@ -56,6 +63,7 @@
 <li><p><code><a href="../reference/whiten_apply.html">whiten_apply()</a></code> validates <code>runs</code>: a length mismatch was silently recycled by <code><a href="https://rdrr.io/r/base/split.html" class="external-link">split()</a></code> and an <code>NA</code> left that row unwritten in both <code>X</code> and <code>Y</code>. Both now raise an error, and character run labels are accepted.</p></li>
 <li><p><code>compat$plan_from_phi()</code> works with its documented default <code>theta = NULL</code> for global and run pooling. It previously reported an MA order of <code>-Inf</code> and produced a plan that <code><a href="../reference/whiten_apply.html">whiten_apply()</a></code> rejected with “subscript out of bounds” – the plan built by the example in <code><a href="../reference/compat.html">?compat</a></code>.</p></li>
 </ul></div>
+</div>
     <div class="section level2">
 <h2 class="pkg-version" data-toc-text="0.3.2" id="fmriar-032">fmriAR 0.3.2<a class="anchor" aria-label="anchor" href="#fmriar-032"></a></h2><p class="text-muted">CRAN release: 2026-04-15</p>
 <ul><li>
