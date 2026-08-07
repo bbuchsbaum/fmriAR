@@ -326,27 +326,81 @@ test_that("parcel and global fits agree on average", {
 
 # --- Internal estimator invariants -------------------------------------------
 
-test_that("pooled autocovariance is positive semi-definite", {
-  # Yule-Walker on a non-PSD autocovariance returns explosive coefficients.
+test_that("the PSD projection actually repairs non-PSD autocovariance", {
+  # Feed .acvf_from_pooled() sequences that are provably NOT positive
+  # semi-definite, so the projection has to do work. An earlier version of this
+  # test only used well-behaved data, where the projection never ran at all and
+  # deleting it left the test passing.
   psd_min_eig <- function(g) {
     min(eigen(stats::toeplitz(g), symmetric = TRUE, only.values = TRUE)$values)
   }
-  set.seed(1801)
-  cases <- list(
-    ar1     = ar_sim(120L, 0.8, nvox = 5L, seed = 1802),
-    white   = matrix(stats::rnorm(120L * 5L), 120L, 5L),
-    tiny    = matrix(stats::rnorm(12L * 3L), 12L, 3L),
-    const   = matrix(rep(5, 60L * 3L), 60L, 3L) +
-                matrix(stats::rnorm(60L * 3L, sd = 1e-9), 60L, 3L)
+  bad <- list(
+    rho_gt_1   = list(num = c(1, 1.4), pairs = c(10, 9)),
+    alternating = list(num = c(1, -0.99, 0.98, -0.97), pairs = c(50, 40, 30, 5)),
+    long_tail  = list(num = c(1, 0.2, 0.1, 0.9), pairs = c(100, 90, 80, 3)),
+    spike      = list(num = c(1, 0.1, 1.3, 0.1), pairs = c(60, 50, 4, 30))
   )
-  for (nm in names(cases)) {
-    M <- cases[[nm]]
-    seg <- rep(1:4, length.out = nrow(M))          # four disjoint segments
-    pooled <- fmriAR:::.pooled_acvf_segments(M, sort(seg), 4L)
-    g <- fmriAR:::.acvf_from_pooled(pooled)
-    if (length(g) > 1L) {
-      expect_gte(psd_min_eig(g), -1e-8 * max(1, abs(g[1])), label = nm)
-    }
+  ran <- 0L
+  for (nm in names(bad)) {
+    p <- bad[[nm]]
+    g_unb <- p$num / p$pairs
+    if (psd_min_eig(g_unb) >= 0) next          # only count genuinely bad inputs
+    ran <- ran + 1L
+    g <- fmriAR:::.acvf_from_pooled(p)
+    expect_gte(psd_min_eig(g), -1e-8 * max(1, abs(g[1])), label = nm)
+    expect_true(all(is.finite(g)), label = nm)
+  }
+  expect_gt(ran, 0L)   # the projection must have been exercised
+})
+
+test_that("Yule-Walker on the projected autocovariance stays stationary", {
+  for (r1 in c(0.9, 0.999, 1.05, 1.5)) {
+    g <- fmriAR:::.acvf_from_pooled(list(num = c(1, r1), pairs = c(100, 90)))
+    yw <- yw_from_acvf_fast(g[1:2], 1L)
+    expect_lt(abs(yw$phi[1]), 1, label = paste("rho1 =", r1))
+  }
+})
+
+test_that("multiscale autocovariance covers the pooling target", {
+  # Regression guard: the acvf was sized to the order selected at this scale,
+  # so .ms_pad() zero-filled the remaining lags and Yule-Walker on the padded
+  # vector produced coefficients pinned at the stationarity boundary.
+  M <- ar_sim(300L, 0.5, nvox = 3L, seed = 2901)
+  colnames(M) <- as.character(seq_len(ncol(M)))
+  est1 <- fmriAR:::.ms_estimate_scale(
+    M, function(y) list(phi = 0.5, order = c(p = 1L, q = 0L)),
+    run_starts0 = 0L, lag_max = 5L)
+  for (g in est1$acvf) {
+    expect_gte(length(g), 6L)            # lags 0..5, never truncated to p + 1
+    expect_true(all(is.finite(g)))
+    expect_gt(g[1], 0)
+    expect_false(all(g[-1] == 0))        # must not be zero-filled
+  }
+})
+
+test_that("parcel censoring is handled at every multiscale entry point", {
+  # Regression guard: .ms_estimate_scale built its acvf with a helper that
+  # centres each segment separately, so censoring re-introduced the per-fragment
+  # centering defect on the p_target and acvf_pooled paths only, driving phi
+  # from +0.7 to -0.07. And parcel_sets combined with censor crashed outright.
+  resid <- ar_sim(300L, 0.7, nvox = 36L, seed = 3001)
+  cens <- which(rep(c(FALSE, FALSE, TRUE), length.out = 300L))
+  pf <- rep(1:6, each = 6); pm <- rep(1:3, each = 12); pc <- rep(1:2, each = 18)
+
+  variants <- list(
+    plain    = list(),
+    p_target = list(p_target = 1L),
+    acvf     = list(multiscale = TRUE, ms_mode = "acvf_pooled", p_target = 1L),
+    pacf     = list(multiscale = TRUE, ms_mode = "pacf_weighted", p_target = 1L),
+    sets     = list(parcel_sets = list(coarse = pc, medium = pm, fine = pf),
+                    multiscale = TRUE, ms_mode = "acvf_pooled", p_target = 1L)
+  )
+  for (nm in names(variants)) {
+    args <- c(list(resid = resid, parcels = pf, pooling = "parcel",
+                   method = "ar", p = 1L, censor = cens), variants[[nm]])
+    plan <- do.call(fmriAR::fit_noise, args)
+    est <- mean(vapply(plan$phi_by_parcel, function(z) z[1], numeric(1)))
+    expect_equal(est, 0.7, tolerance = 0.15, info = nm)
   }
 })
 
@@ -428,6 +482,68 @@ test_that("each parcel's design is whitened with that parcel's coefficients", {
     expect_equal(out$X_by[[k]], manual, tolerance = 1e-8,
                  info = paste("parcel", k))
   }
+})
+
+test_that("whiten_apply returns rows in input order for any run labelling", {
+  # Regression guard: results were reassembled with rbind() over split(), which
+  # orders by sorted run label, so a run labelling that is not ascending in time
+  # silently returned a row permutation of the correct answer.
+  resid <- ar_sim(120L, 0.6, nvox = 6L, seed = 2601)
+  X <- cbind(1, stats::rnorm(120L))
+  plan <- fmriAR::fit_noise(resid, pooling = "global", method = "ar", p = 1L)
+
+  ref <- fmriAR::whiten_apply(plan, X, resid, run_starts = c(0L, 60L))
+  for (lab in list(c(2L, 1L), c(5L, 3L), c(10L, 1L))) {
+    out <- fmriAR::whiten_apply(plan, X, resid, runs = rep(lab, each = 60L))
+    expect_equal(out$Y, ref$Y, tolerance = 1e-12,
+                 info = paste("labels", paste(lab, collapse = "/")))
+    expect_equal(out$X, ref$X, tolerance = 1e-12)
+  }
+})
+
+test_that("enforce_stationary_ar returns roots strictly outside the unit circle", {
+  # Clamping reflection coefficients bounds each |kappa| < 1 but at high order
+  # leaves the roots on the unit circle: PACF 0.99 repeated ten times gave
+  # coefficients above 45 with min|root| equal to 1 to machine precision.
+  cases <- list(rep(0.99, 10), rep(0.99, 6), rep(0.9, 3), c(0.5, 0.3),
+                c(1.9, -0.99), rep(0.999, 4))
+  for (v in cases) {
+    out <- fmriAR:::enforce_stationary_ar(v, 0.99)
+    if (!length(out)) next          # refusing is an acceptable outcome
+    expect_true(all(is.finite(out)))
+    expect_gt(min(Mod(polyroot(c(1, -out)))), 1)
+  }
+})
+
+test_that("degenerate order requests fail cleanly rather than opaquely", {
+  # p_max at or near n drove Levinson to a NaN prediction error, surfacing as
+  # "missing value where TRUE/FALSE needed" from an internal comparison.
+  set.seed(2701)
+  for (n in c(20L, 40L, 60L)) {
+    for (pm in c(n - 2L, n - 1L, n)) {
+      resid <- matrix(stats::rnorm(n * 4L), n, 4L)
+      plan <- fmriAR::fit_noise(resid, pooling = "global", method = "ar",
+                                p = "auto", p_max = pm)
+      expect_s3_class(plan, "fmriAR_plan")
+      expect_gt(min_root(plan_phi(plan)), 1)
+    }
+  }
+})
+
+test_that("order selection is bounded by sample size but an explicit p is not", {
+  set.seed(2801)
+  short <- matrix(stats::rnorm(11L * 5L), 11L, 5L)   # white noise, 11 frames
+  auto <- fmriAR::fit_noise(short, pooling = "global", method = "ar",
+                            p = "auto", p_max = 8L)
+  expect_lte(auto$order[["p"]], 2L)
+
+  X <- cbind(1, stats::rnorm(11L))
+  w <- fmriAR::whiten_apply(auto, X, short)
+  expect_lt(stats::sd(w$Y) / stats::sd(short), 1.05)   # must not amplify
+
+  fixed <- fmriAR::fit_noise(matrix(stats::rnorm(25L * 5L), 25L, 5L),
+                             pooling = "global", method = "ar", p = 4L)
+  expect_equal(length(plan_phi(fixed)), 4L)
 })
 
 test_that("acorr_diagnostics honours its runs argument", {

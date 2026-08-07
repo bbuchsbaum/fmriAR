@@ -116,38 +116,55 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
   list(num = num, pairs = pairs)
 }
 
-.acvf_is_psd <- function(gamma, tol = 1e-10) {
+# Positive definite with a strict relative margin, not merely non-negative.
+# Sitting on the cone boundary makes a reflection coefficient exactly +/-1, which
+# drives the Levinson prediction error to the 1e-12 floor; BIC then reads that as
+# a perfect fit and always selects p_max.
+.acvf_is_psd <- function(gamma, tol = 1e-6) {
+  if (!length(gamma) || !all(is.finite(gamma)) || gamma[1] <= 0) return(FALSE)
   if (length(gamma) < 2L) return(TRUE)
   ev <- tryCatch(
     eigen(stats::toeplitz(gamma), symmetric = TRUE, only.values = TRUE)$values,
     error = function(e) NA_real_
   )
   if (anyNA(ev)) return(FALSE)
-  min(ev) >= -tol * max(1, abs(gamma[1]))
+  min(ev) >= tol * gamma[1]
 }
 
 # Prefer the pair-count (unbiased) normalization, which is not attenuated when
 # censoring thins the pairs available at each lag. Fall back only as far toward
 # the PSD-safe common-divisor form as needed to make the Toeplitz matrix PSD,
 # since Yule-Walker on a non-PSD acvf returns explosive coefficients.
-.acvf_from_pooled <- function(pooled, tol = 1e-10) {
+.acvf_from_pooled <- function(pooled, order = NULL, tol = 1e-10) {
   num <- pooled$num
   pairs <- pooled$pairs
-  keep <- seq_len(max(1L, max(which(pairs > 0))))
+  avail <- max(which(pairs > 0))
+  # Correct only the Toeplitz matrix actually being inverted. Fragmented data
+  # leaves few pairs at long lags, so those entries are noisy and frequently
+  # break PSD; shrinking the whole vector to repair them attenuates the short
+  # lags that carry the signal (phi = 0.95 came back as 0.85 at 40% censoring).
+  keep <- if (is.null(order)) seq_len(max(1L, avail))
+          else seq_len(max(1L, min(as.integer(order) + 1L, avail)))
   num <- num[keep]
   pairs <- pairs[keep]
   if (!length(num) || pairs[1L] <= 0) return(numeric(0))
 
   g_unb <- ifelse(pairs > 0, num / pairs, 0)
+  if (!is.finite(g_unb[1]) || g_unb[1] <= 0) return(numeric(0))
   if (.acvf_is_psd(g_unb, tol)) return(g_unb)
-  g_psd <- num / pairs[1L]
+
+  # Shrink the non-zero lags toward white noise until the Toeplitz matrix is
+  # positive definite. Shrinking toward the common-divisor form instead is not
+  # guaranteed to terminate: that form can itself be non-PSD, leaving both ends
+  # of the search invalid. At lambda = 0 the matrix is gamma[1] * I, so a valid
+  # point always exists and the bisection cannot fail.
   lo <- 0
   hi <- 1
-  for (i in seq_len(40L)) {
+  for (i in seq_len(50L)) {
     mid <- (lo + hi) / 2
-    if (.acvf_is_psd(mid * g_unb + (1 - mid) * g_psd, tol)) lo <- mid else hi <- mid
+    if (.acvf_is_psd(c(g_unb[1L], g_unb[-1L] * mid), tol)) lo <- mid else hi <- mid
   }
-  lo * g_unb + (1 - lo) * g_psd
+  c(g_unb[1L], g_unb[-1L] * lo)
 }
 
 # Indices of non-censored timepoints plus the 0-based starts of the contiguous
@@ -185,17 +202,19 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
   if (p_cap < 1L) return(list(phi = numeric(0), order = c(p = 0L, q = 0L)))
 
   seg_id <- cumsum(seq_len(n) %in% (starts0 + 1L))
-  gamma <- .acvf_from_pooled(
-    .pooled_acvf_segments(matrix(y, ncol = 1L), seg_id, p_cap, center_id = center_id)
-  )
-  if (!length(gamma) || !is.finite(gamma[1]) || gamma[1] <= 0) {
+  pooled <- .pooled_acvf_segments(matrix(y, ncol = 1L), seg_id, p_cap,
+                                  center_id = center_id)
+  gamma0 <- .acvf_from_pooled(pooled, order = 0L)
+  if (!length(gamma0) || !is.finite(gamma0[1]) || gamma0[1] <= 0) {
     return(list(phi = numeric(0), order = c(p = 0L, q = 0L)))
   }
-  p_cap <- min(p_cap, length(gamma) - 1L)
+  p_cap <- min(p_cap, max(which(pooled$pairs > 0)) - 1L)
   if (p_cap < 1L) return(list(phi = numeric(0), order = c(p = 0L, q = 0L)))
 
+  # PSD-correct at the order being fitted, not at p_max.
   fit_order <- function(pp) {
-    yw <- yw_from_acvf_fast(gamma[seq_len(pp + 1L)], pp)
+    g <- .acvf_from_pooled(pooled, order = pp)
+    yw <- yw_from_acvf_fast(g[seq_len(pp + 1L)], pp)
     list(phi = enforce_stationary_ar(yw$phi, 0.99),
          sigma2 = pmax(yw$sigma2, 1e-12))
   }
@@ -206,13 +225,21 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
     return(list(phi = fit_order(pp)$phi, order = c(p = pp, q = 0L)))
   }
 
+  # Cap the order BIC may select by the data available. Selection on a handful
+  # of points will happily choose AR(8) from 11 observations, and the resulting
+  # filter inflates variance instead of whitening. An explicitly requested order
+  # is honoured as given; this bounds only the search.
+  p_sel <- min(p_cap, floor(n / 5))
   n_log <- log(n)
-  best <- list(bic = 2 * n * log(pmax(gamma[1], 1e-12)) + n_log,
+  best <- list(bic = 2 * n * log(pmax(gamma0[1], 1e-12)) + n_log,
                phi = numeric(0), p = 0L)
-  for (pp in seq_len(p_cap)) {
+  for (pp in seq_len(max(0L, p_sel))) {
     f <- fit_order(pp)
+    # enforce_stationary_ar() returns length 0 when it cannot produce a
+    # stationary filter, which must not be recorded as an order-pp fit.
+    if (!is.finite(f$sigma2) || length(f$phi) != pp || !all(is.finite(f$phi))) next
     bic <- 2 * n * log(f$sigma2) + (pp + 1L) * n_log
-    if (bic < best$bic) best <- list(bic = bic, phi = f$phi, p = pp)
+    if (is.finite(bic) && bic < best$bic) best <- list(bic = bic, phi = f$phi, p = pp)
   }
   list(phi = best$phi, order = c(p = best$p, q = 0L))
 }
@@ -409,13 +436,12 @@ fit_noise <- function(resid = NULL,
       # Pool the autocovariance over the valid segments, centering once across
       # all of this run's surviving frames.
       seg_id <- cumsum(c(1L, as.integer(diff(valid_idx) > 1L)))
-      gamma <- .acvf_from_pooled(
-        .pooled_acvf_segments(mat[valid_idx, , drop = FALSE], seg_id, p_cap)
-      )
-      if (!length(gamma) || !is.finite(gamma[1]) || gamma[1] <= 0) {
+      pooled <- .pooled_acvf_segments(mat[valid_idx, , drop = FALSE], seg_id, p_cap)
+      gamma0 <- .acvf_from_pooled(pooled, order = 0L)
+      if (!length(gamma0) || !is.finite(gamma0[1]) || gamma0[1] <= 0) {
         return(list(phi = numeric(0), theta = numeric(0), order = c(p = 0L, q = 0L)))
       }
-      p_cap <- min(p_cap, length(gamma) - 1L)
+      p_cap <- min(p_cap, max(which(pooled$pairs > 0)) - 1L)
       if (p_cap < 1L) {
         return(list(phi = numeric(0), theta = numeric(0), order = c(p = 0L, q = 0L)))
       }
@@ -425,8 +451,8 @@ fit_noise <- function(resid = NULL,
         if (pp <= 0L) {
           return(list(phi = numeric(0), theta = numeric(0), order = c(p = 0L, q = 0L)))
         }
-        gamma_pp <- gamma[seq_len(pp + 1L)]
-        yw <- yw_from_acvf_fast(gamma_pp, pp)
+        gamma_pp <- .acvf_from_pooled(pooled, order = pp)
+        yw <- yw_from_acvf_fast(gamma_pp[seq_len(pp + 1L)], pp)
         return(list(phi = enforce_stationary_ar(yw$phi, 0.99),
                     theta = numeric(0), order = c(p = pp, q = 0L)))
       }
@@ -434,19 +460,23 @@ fit_noise <- function(resid = NULL,
       best_phi <- numeric(0)
       best_order <- c(p = 0L, q = 0L)
       n_eff_log <- log(n_eff)
-      sigma0 <- pmax(gamma[1], 1e-12)
+      sigma0 <- pmax(gamma0[1], 1e-12)
       best_bic <- 2 * n_eff * log(sigma0) + n_eff_log
+      # Bound the order BIC may select by available data; an explicit p is honoured.
+      p_sel <- min(p_cap, floor(n_eff / 5))
       if (p_cap >= 1L) {
-        for (pp in seq_len(p_cap)) {
-          gamma_pp <- gamma[seq_len(pp + 1L)]
-          yw <- yw_from_acvf_fast(gamma_pp, pp)
+        for (pp in seq_len(max(0L, p_sel))) {
+          gamma_pp <- .acvf_from_pooled(pooled, order = pp)
+          yw <- yw_from_acvf_fast(gamma_pp[seq_len(pp + 1L)], pp)
           sigma2 <- pmax(yw$sigma2, 1e-12)
+          if (!is.finite(sigma2)) next
           bic <- 2 * n_eff * log(sigma2) + (pp + 1L) * n_eff_log
-          if (bic < best_bic) {
-            best_bic <- bic
-            best_phi <- enforce_stationary_ar(yw$phi, 0.99)
-            best_order <- c(p = pp, q = 0L)
-          }
+          if (!is.finite(bic) || bic >= best_bic) next
+          phi_pp <- enforce_stationary_ar(yw$phi, 0.99)
+          if (length(phi_pp) != pp || !all(is.finite(phi_pp))) next
+          best_bic <- bic
+          best_phi <- phi_pp
+          best_order <- c(p = pp, q = 0L)
         }
       }
       list(phi = best_phi, theta = numeric(0), order = best_order)
@@ -493,7 +523,7 @@ fit_noise <- function(resid = NULL,
     }
 
     if (is.null(parcel_sets)) {
-      est_f <- .ms_estimate_scale(M_fine, estimator, run_starts0, lag_max = target)
+      est_f <- .ms_estimate_scale(M_fine, estimator, run_starts0, lag_max = target, center_id = seg$run_id)
       if (is.null(multiscale_mode) || target == 0L) {
         phi_parcel <- est_f$phi
       } else if (identical(multiscale_mode, "pacf_weighted")) {
@@ -528,11 +558,13 @@ fit_noise <- function(resid = NULL,
       stopifnot(length(parcels_medium) == ncol(resid))
       stopifnot(all(parcels_fine == parcels))
 
-      M_coarse <- .parcel_means(resid, parcels_coarse)
-      M_medium <- .parcel_means(resid, parcels_medium)
-      est_c <- .ms_estimate_scale(M_coarse, estimator, run_starts0, lag_max = target)
-      est_m <- .ms_estimate_scale(M_medium, estimator, run_starts0, lag_max = target)
-      est_f <- .ms_estimate_scale(M_fine, estimator, run_starts0, lag_max = target)
+      # Subset to the surviving frames exactly as M_fine is, or the centering
+      # grouping and the data disagree in length.
+      M_coarse <- .parcel_means(resid, parcels_coarse)[seg$idx, , drop = FALSE]
+      M_medium <- .parcel_means(resid, parcels_medium)[seg$idx, , drop = FALSE]
+      est_c <- .ms_estimate_scale(M_coarse, estimator, run_starts0, lag_max = target, center_id = seg$run_id)
+      est_m <- .ms_estimate_scale(M_medium, estimator, run_starts0, lag_max = target, center_id = seg$run_id)
+      est_f <- .ms_estimate_scale(M_fine, estimator, run_starts0, lag_max = target, center_id = seg$run_id)
 
       parents <- .ms_parent_maps(parcels_fine, parcels_medium, parcels_coarse)
       sizes <- list(
@@ -770,8 +802,12 @@ whiten_apply <- function(plan, X, Y, runs = NULL, run_starts = NULL, censor = NU
   phi_list <- if (length(plan$phi) == 1L) rep(plan$phi, length(rsplits)) else plan$phi
   theta_list <- if (length(plan$theta) == 1L) rep(plan$theta, length(rsplits)) else plan$theta
 
-  Xw_list <- vector("list", length(rsplits))
-  Yw_list <- vector("list", length(rsplits))
+  # Scatter each run's result back to the rows it came from. rbind()-ing the
+  # split pieces reassembles them in sorted run-label order, so any labelling
+  # that is not ascending in time (e.g. run 2 acquired first) silently returned
+  # a row permutation of the right answer for both X and Y.
+  Xw <- matrix(NA_real_, n, ncol(X), dimnames = dimnames(X))
+  Yw <- matrix(NA_real_, n, ncol(Y), dimnames = dimnames(Y))
 
   for (ri in seq_along(rsplits)) {
     idx <- rsplits[[ri]]
@@ -787,12 +823,9 @@ whiten_apply <- function(plan, X, Y, runs = NULL, run_starts = NULL, censor = NU
       exact_first_ar1 = isTRUE(plan$exact_first),
       parallel = parallel
     )
-    Xw_list[[ri]] <- out$X
-    Yw_list[[ri]] <- out$Y
+    Xw[idx, ] <- out$X
+    Yw[idx, ] <- out$Y
   }
-
-  Xw <- do.call(rbind, Xw_list)
-  Yw <- do.call(rbind, Yw_list)
 
   if (inplace) {
     X[,] <- Xw
