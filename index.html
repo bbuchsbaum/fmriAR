@@ -55,46 +55,97 @@
   <main id="main" class="col-md-9"><div class="section level1">
 <div class="page-header"><h1 id="fmriar">fmriAR<a class="anchor" aria-label="anchor" href="#fmriar"></a>
 </h1></div>
-<p>fmriAR provides fast AR/ARMA-based prewhitening for fMRI GLM workflows. It estimates voxel-wise or parcel-based noise models, applies segment-aware whitening, and exposes diagnostics that make it easy to confirm residual independence.</p>
-<div class="section level2">
-<h2 id="key-capabilities">Key capabilities<a class="anchor" aria-label="anchor" href="#key-capabilities"></a>
-</h2>
-<ul>
-<li>Automatic AR/ARMA order selection via Hannan–Rissanen initialization and iterative refinement (Hannan &amp; Rissanen, 1982)</li>
-<li>Segment-aware whitening that respects run boundaries and optional multiscale pooling across parcels</li>
-<li>Convenience helpers to whiten design matrices and inspect autocorrelation diagnostics</li>
-</ul>
-</div>
+<!-- badges: start -->
+
+<p>Fast AR and ARMA prewhitening for fMRI GLM workflows. Estimate a noise model from residuals, apply the same filter to the design matrix and the data, then fit a standard linear model on the whitened series.</p>
+<p>The C++ core (RcppArmadillo) keeps large-scale whitening fast. Estimation is run-aware and censor-aware: lag products never cross a run boundary or a scrubbed frame.</p>
 <div class="section level2">
 <h2 id="installation">Installation<a class="anchor" aria-label="anchor" href="#installation"></a>
 </h2>
 <div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/utils/install.packages.html" class="external-link">install.packages</a></span><span class="op">(</span><span class="st">"fmriAR"</span><span class="op">)</span></span>
-<span></span>
-<span><span class="co"># development version:</span></span>
-<span><span class="co"># install.packages("remotes")  # only needed once</span></span>
-<span><span class="co"># remotes::install_github("bbuchsbaum/fmriAR")</span></span>
-<span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://bbuchsbaum.github.io/fmriAR/">fmriAR</a></span><span class="op">)</span></span></code></pre></div>
+<code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/utils/install.packages.html" class="external-link">install.packages</a></span><span class="op">(</span><span class="st">"fmriAR"</span><span class="op">)</span></span></code></pre></div>
+<p>Development version:</p>
+<div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="co"># install.packages("remotes")</span></span>
+<span><span class="fu">remotes</span><span class="fu">::</span><span class="fu">install_github</span><span class="op">(</span><span class="st">"bbuchsbaum/fmriAR"</span><span class="op">)</span></span></code></pre></div>
+<p>Documentation: <a href="https://bbuchsbaum.github.io/fmriAR/" class="uri">https://bbuchsbaum.github.io/fmriAR/</a></p>
 </div>
 <div class="section level2">
-<h2 id="quick-start">Quick start<a class="anchor" aria-label="anchor" href="#quick-start"></a>
+<h2 id="typical-workflow">Typical workflow<a class="anchor" aria-label="anchor" href="#typical-workflow"></a>
 </h2>
-<div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="co"># X: design matrix (n x p), Y: voxel data (n x v), runs: factor or integer run labels</span></span>
-<span><span class="va">res</span>   <span class="op">&lt;-</span> <span class="va">Y</span> <span class="op">-</span> <span class="va">X</span> <span class="op"><a href="https://rdrr.io/r/base/matmult.html" class="external-link">%*%</a></span> <span class="fu"><a href="https://rdrr.io/r/base/qr.html" class="external-link">qr.solve</a></span><span class="op">(</span><span class="va">X</span>, <span class="va">Y</span><span class="op">)</span>                      <span class="co"># pre-fit residuals</span></span>
-<span><span class="va">plan</span>  <span class="op">&lt;-</span> <span class="fu"><a href="reference/fit_noise.html">fit_noise</a></span><span class="op">(</span><span class="va">res</span>, runs <span class="op">=</span> <span class="va">runs</span>, method <span class="op">=</span> <span class="st">"ar"</span>,    <span class="co"># estimate AR model</span></span>
-<span>                   p <span class="op">=</span> <span class="st">"auto"</span>, pooling <span class="op">=</span> <span class="st">"global"</span><span class="op">)</span></span>
-<span><span class="va">xyw</span>   <span class="op">&lt;-</span> <span class="fu"><a href="reference/whiten_apply.html">whiten_apply</a></span><span class="op">(</span><span class="va">plan</span>, <span class="va">X</span>, <span class="va">Y</span>, runs <span class="op">=</span> <span class="va">runs</span><span class="op">)</span>         <span class="co"># whiten design and data</span></span>
-<span><span class="va">fit</span>   <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/stats/lmfit.html" class="external-link">lm.fit</a></span><span class="op">(</span><span class="va">xyw</span><span class="op">$</span><span class="va">X</span>, <span class="va">xyw</span><span class="op">$</span><span class="va">Y</span><span class="op">)</span></span>
-<span><span class="va">se</span>    <span class="op">&lt;-</span> <span class="fu"><a href="reference/sandwich_from_whitened_resid.html">sandwich_from_whitened_resid</a></span><span class="op">(</span><span class="va">xyw</span><span class="op">$</span><span class="va">X</span>, <span class="va">xyw</span><span class="op">$</span><span class="va">Y</span>, beta <span class="op">=</span> <span class="va">fit</span><span class="op">$</span><span class="va">coefficients</span><span class="op">)</span></span>
-<span><span class="va">ac</span>    <span class="op">&lt;-</span> <span class="fu"><a href="reference/acorr_diagnostics.html">acorr_diagnostics</a></span><span class="op">(</span><span class="va">xyw</span><span class="op">$</span><span class="va">Y</span> <span class="op">-</span> <span class="va">xyw</span><span class="op">$</span><span class="va">X</span> <span class="op"><a href="https://rdrr.io/r/base/matmult.html" class="external-link">%*%</a></span> <span class="va">fit</span><span class="op">$</span><span class="va">coefficients</span><span class="op">)</span></span></code></pre></div>
-<p>See <code>vignettes/</code> and <code><a href="reference/fit_noise.html">?fit_noise</a></code> for more detailed workflows, including multiscale pooling and ARMA whitening.</p>
+<ol style="list-style-type: decimal">
+<li>Fit an initial OLS model and take residuals.</li>
+<li>Estimate an AR/ARMA plan with <code><a href="reference/fit_noise.html">fit_noise()</a></code>.</li>
+<li>Whiten both <code>X</code> and <code>Y</code> with <code><a href="reference/whiten_apply.html">whiten_apply()</a></code> (or do both steps with <code><a href="reference/whiten.html">whiten()</a></code>).</li>
+<li>Fit the linear model on the whitened matrices.</li>
+<li>Optionally compute sandwich standard errors and residual autocorrelation.</li>
+</ol>
+<div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://bbuchsbaum.github.io/fmriAR/">fmriAR</a></span><span class="op">)</span></span>
+<span></span>
+<span><span class="co"># X: design (n x p), Y: data (n x voxels), runs: one label per timepoint</span></span>
+<span><span class="va">resid</span> <span class="op">&lt;-</span> <span class="va">Y</span> <span class="op">-</span> <span class="va">X</span> <span class="op"><a href="https://rdrr.io/r/base/matmult.html" class="external-link">%*%</a></span> <span class="fu"><a href="https://rdrr.io/r/base/qr.html" class="external-link">qr.solve</a></span><span class="op">(</span><span class="va">X</span>, <span class="va">Y</span><span class="op">)</span></span>
+<span></span>
+<span><span class="va">plan</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/fit_noise.html">fit_noise</a></span><span class="op">(</span></span>
+<span>  <span class="va">resid</span>,</span>
+<span>  runs <span class="op">=</span> <span class="va">runs</span>,</span>
+<span>  method <span class="op">=</span> <span class="st">"ar"</span>,</span>
+<span>  p <span class="op">=</span> <span class="st">"auto"</span>,</span>
+<span>  pooling <span class="op">=</span> <span class="st">"global"</span>,</span>
+<span>  design <span class="op">=</span> <span class="va">X</span>            <span class="co"># optional: undo residual-projection bias</span></span>
+<span><span class="op">)</span></span>
+<span></span>
+<span><span class="va">xyw</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/whiten_apply.html">whiten_apply</a></span><span class="op">(</span><span class="va">plan</span>, <span class="va">X</span>, <span class="va">Y</span>, runs <span class="op">=</span> <span class="va">runs</span><span class="op">)</span></span>
+<span><span class="va">fit</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/stats/lmfit.html" class="external-link">lm.fit</a></span><span class="op">(</span><span class="va">xyw</span><span class="op">$</span><span class="va">X</span>, <span class="va">xyw</span><span class="op">$</span><span class="va">Y</span><span class="op">)</span></span>
+<span><span class="va">se</span>  <span class="op">&lt;-</span> <span class="fu"><a href="reference/sandwich_from_whitened_resid.html">sandwich_from_whitened_resid</a></span><span class="op">(</span><span class="va">xyw</span><span class="op">$</span><span class="va">X</span>, <span class="va">xyw</span><span class="op">$</span><span class="va">Y</span>, beta <span class="op">=</span> <span class="va">fit</span><span class="op">$</span><span class="va">coefficients</span><span class="op">)</span></span>
+<span><span class="va">ac</span>  <span class="op">&lt;-</span> <span class="fu"><a href="reference/acorr_diagnostics.html">acorr_diagnostics</a></span><span class="op">(</span><span class="va">xyw</span><span class="op">$</span><span class="va">Y</span> <span class="op">-</span> <span class="va">xyw</span><span class="op">$</span><span class="va">X</span> <span class="op"><a href="https://rdrr.io/r/base/matmult.html" class="external-link">%*%</a></span> <span class="va">fit</span><span class="op">$</span><span class="va">coefficients</span><span class="op">)</span></span></code></pre></div>
+<p>One-step shortcut (fits the plan from <code>Y</code> and <code>X</code> internally):</p>
+<div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="va">xyw</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/whiten.html">whiten</a></span><span class="op">(</span><span class="va">X</span>, <span class="va">Y</span>, runs <span class="op">=</span> <span class="va">runs</span>, method <span class="op">=</span> <span class="st">"ar"</span>, p <span class="op">=</span> <span class="st">"auto"</span><span class="op">)</span></span></code></pre></div>
+</div>
+<div class="section level2">
+<h2 id="what-the-package-does">What the package does<a class="anchor" aria-label="anchor" href="#what-the-package-does"></a>
+</h2>
+<ul>
+<li>
+<strong>AR and ARMA plans.</strong> <code>method = "ar"</code> selects order by BIC on a Yule–Walker fit (<code>p = "auto"</code>). <code>method = "arma"</code> uses Hannan–Rissanen
+<ol start="1982" style="list-style-type: decimal">
+<li>on the run-mean residual series.</li>
+</ol>
+</li>
+<li>
+<strong>Pooling.</strong> <code>"global"</code> (one filter), <code>"run"</code> (one per run), or <code>"parcel"</code> (one per parcel, with optional multiscale shrinkage via <code>parcel_sets</code>).</li>
+<li>
+<strong>Censoring.</strong> Pass motion-scrubbed frames as indices or a logical mask; they are dropped from estimation and treated as segment breaks when whitening.</li>
+<li>
+<strong>Residual-bias correction.</strong> Autocovariance from GLM residuals is biased low (<code>E[ehat ehat'] = M Sigma M</code>). Pass <code>design = X</code> to <code><a href="reference/fit_noise.html">fit_noise()</a></code> or <code><a href="reference/noise_acvf.html">noise_acvf()</a></code> to undo that bias (AR, global/run pooling). Cache the map with <code><a href="reference/acvf_bias_matrix.html">acvf_bias_matrix()</a></code> when many datasets share a design.</li>
+<li>
+<strong>Noise scale on the plan.</strong> An <code>fmriAR_plan</code> now stores <code>gamma</code> (voxel-scale autocovariance) and <code>sigma2</code> (innovation variance) per pooling unit, not just the AR/MA coefficients.</li>
+<li>
+<strong>Autocovariance without a model.</strong> <code><a href="reference/noise_acvf.html">noise_acvf()</a></code> returns the same run- and censor-aware covariances <code><a href="reference/fit_noise.html">fit_noise()</a></code> uses internally, plus pair counts so you can see how much data backs each lag.</li>
+<li>
+<strong>AFNI-style restricted AR.</strong> <code><a href="reference/afni_restricted_plan.html">afni_restricted_plan()</a></code> builds a plan from AFNI root parameters (Cox, 2012) for pipeline comparison.</li>
+</ul>
+<p>See <code><a href="articles/fmriAR-introduction.html">vignette("fmriAR-introduction")</a></code> and <code><a href="reference/fit_noise.html">?fit_noise</a></code> for parcel pooling, ARMA, and AFNI examples.</p>
+</div>
+<div class="section level2">
+<h2 id="options">Options<a class="anchor" aria-label="anchor" href="#options"></a>
+</h2>
+<ul>
+<li>
+<code>options(fmriAR.max_threads = n)</code> — cap OpenMP threads when the package is built with OpenMP (optional; off by default in the CRAN sources).</li>
+<li>
+<code>options(fmriAR.use_cpp_hr = TRUE)</code> — use the C++ Hannan–Rissanen estimator (default). Set <code>FALSE</code> to fall back to the R implementation.</li>
+</ul>
 </div>
 <div class="section level2">
 <h2 id="references">References<a class="anchor" aria-label="anchor" href="#references"></a>
 </h2>
 <ul>
-<li>Hannan, E. J., &amp; Rissanen, J. (1982). Recursive estimation of mixed autoregressive-moving average order. <em>Biometrika</em>, 69(1), 81–94.</li>
+<li>Hannan, E. J., &amp; Rissanen, J. (1982). Recursive estimation of mixed autoregressive-moving average order. <em>Biometrika</em>, 69(1), 81–94. <a href="https://doi.org/10.1093/biomet/69.1.81" class="external-link uri">https://doi.org/10.1093/biomet/69.1.81</a>
+</li>
+<li>Cox, R. W. (2012). AFNI: What, where, how? <em>NeuroImage</em>, 62(2), 743–747. <a href="https://doi.org/10.1016/j.neuroimage.2011.08.056" class="external-link uri">https://doi.org/10.1016/j.neuroimage.2011.08.056</a>
+</li>
 </ul>
 </div>
 </div>
@@ -130,7 +181,13 @@
 </ul>
 </div>
 
-
+<div class="dev-status">
+<h2 data-toc-skip>Dev status</h2>
+<ul class="list-unstyled">
+<li><a href="https://CRAN.R-project.org/package=fmriAR" class="external-link"><img src="https://www.r-pkg.org/badges/version/fmriAR" alt="CRAN status"></a></li>
+<li><a href="https://github.com/bbuchsbaum/fmriAR/actions/workflows/R-CMD-check.yaml" class="external-link"><img src="https://github.com/bbuchsbaum/fmriAR/actions/workflows/R-CMD-check.yaml/badge.svg" alt="R-CMD-check"></a></li>
+</ul>
+</div>
 
   </aside>
 </div>
