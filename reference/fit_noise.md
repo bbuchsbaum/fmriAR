@@ -127,8 +127,12 @@ fit_noise(
   produced `resid`. Supplying it corrects the downward bias that
   projecting a design out of the data puts into the autocovariance, and
   hence into `phi`. Opt-in, because it changes estimates and needs the
-  design to be the one that actually formed the residuals. Currently
-  supported for `pooling = "global"` and `"run"` with `method = "ar"`.
+  design to be the one that actually formed the OLS residuals. A
+  numerical orthogonality check rejects detectable mismatches, including
+  typical raw, GLS, robust, or unrelated residuals. Orthogonality cannot
+  prove the exact residual-forming provenance, so the caller remains
+  responsible for supplying the matching design. Currently supported for
+  `pooling = "global"` and `"run"` with `method = "ar"`.
 
 - acvf_correction:
 

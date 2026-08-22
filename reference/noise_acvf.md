@@ -52,8 +52,12 @@ noise_acvf(
 
 - design:
 
-  Optional design matrix whose projection produced `resid`. When
-  supplied the residual bias is corrected; see
+  Optional design matrix whose projection produced `resid`. The
+  residuals must be ordinary least-squares residuals numerically
+  orthogonal to this design. A numerical check rejects detectable
+  mismatches, but orthogonality alone cannot prove the residual-forming
+  provenance; the caller must supply the matching design. When supplied
+  the residual bias is corrected; see
   [`acvf_bias_matrix()`](https://bbuchsbaum.github.io/fmriAR/reference/acvf_bias_matrix.md).
 
 - correction_max_lag:
