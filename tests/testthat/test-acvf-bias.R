@@ -230,6 +230,81 @@ test_that("unsupported correction combinations are refused, not silently ignored
                "3 matrices but there are 1 runs")
 })
 
+test_that("design correction rejects residuals from the wrong operator", {
+  set.seed(707)
+  n <- 120L
+  X <- cbind(1, poly(seq_len(n), 3), matrix(rnorm(n * 4L), n, 4L))
+  Y <- matrix(rnorm(n * 5L), n, 5L)
+  resid <- qr.resid(qr(X), Y)
+
+  expect_invisible(fmriAR:::.validate_design_residuals(resid, X))
+  expect_invisible(fmriAR:::.validate_design_residuals(1e8 * resid, X))
+
+  # The issue-7 failure mode: the series was never projected by X.
+  expect_error(
+    fit_noise(Y, method = "ar", p = 1L, design = X),
+    class = "fmriAR_design_residual_mismatch"
+  )
+  expect_error(
+    noise_acvf(Y, max_lag = 5L, design = X),
+    "not orthogonal.*matching OLS residuals"
+  )
+
+  # A different residual operator is not interchangeable with OLS either.
+  W <- diag(seq(0.5, 1.5, length.out = n))
+  beta_w <- solve(crossprod(X, W %*% X), crossprod(X, W %*% Y))
+  resid_w <- Y - X %*% beta_w
+  expect_error(
+    fit_noise(resid_w, method = "ar", p = 1L, design = X),
+    "not orthogonal"
+  )
+})
+
+test_that("design-residual validation obeys OLS column-space invariants", {
+  set.seed(708)
+  n <- 90L
+  X <- cbind(1, poly(seq_len(n), 3), rnorm(n))
+  # Duplicate and zero columns exercise rank-deficient designs explicitly.
+  X_rank_deficient <- cbind(X, duplicate = X[, 2L], zero = 0)
+  Y <- matrix(rnorm(n * 6L), n)
+  residuals <- qr.resid(qr(X_rank_deficient), Y)
+  residuals_before <- residuals
+  design_before <- X_rank_deficient
+
+  expect_invisible(
+    fmriAR:::.validate_design_residuals(residuals, X_rank_deficient)
+  )
+  # Linear combinations across response columns, including mean_series, stay
+  # in the same residual subspace.
+  expect_invisible(fmriAR:::.validate_design_residuals(
+    matrix(rowMeans(residuals), ncol = 1L), X_rank_deficient
+  ))
+  mixing <- matrix(rnorm(ncol(residuals) * 3L), ncol(residuals), 3L)
+  expect_invisible(fmriAR:::.validate_design_residuals(
+    residuals %*% mixing, X_rank_deficient
+  ))
+  # Equivalent rescaling and reordering of the design cannot change acceptance.
+  X_equivalent <- X_rank_deficient[, c(3L, 1L, 5L, 2L, 4L, 6L)]
+  X_equivalent <- sweep(X_equivalent, 2L, c(2, 0.5, 3, 1.5, 0.75, 1), "*")
+  expect_invisible(
+    fmriAR:::.validate_design_residuals(residuals, X_equivalent)
+  )
+
+  # The guard is scale-relative in the residuals and does not mutate inputs.
+  expect_invisible(
+    fmriAR:::.validate_design_residuals(1e-10 * residuals, X_rank_deficient)
+  )
+  expect_identical(residuals, residuals_before)
+  expect_identical(X_rank_deficient, design_before)
+
+  bad_design <- X_rank_deficient
+  bad_design[1L, 1L] <- NaN
+  expect_error(
+    fmriAR:::.validate_design_residuals(residuals, bad_design),
+    "NA, NaN, or Inf"
+  )
+})
+
 test_that("correction restores the noise scale, not just its shape, for AR(2)", {
   skip_on_cran()
   # gamma_0 matters on its own: it is the noise variance a consumer builds

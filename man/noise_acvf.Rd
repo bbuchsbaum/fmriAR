@@ -31,8 +31,12 @@ one per run, \code{"parcel"} for one per parcel.}
 \item{parcels}{Parcel labels (length \code{ncol(resid)}), required when
 \code{pooling = "parcel"}.}
 
-\item{design}{Optional design matrix whose projection produced \code{resid}. When
-supplied the residual bias is corrected; see \code{\link[=acvf_bias_matrix]{acvf_bias_matrix()}}.}
+\item{design}{Optional design matrix whose projection produced \code{resid}. The
+residuals must be ordinary least-squares residuals numerically orthogonal
+to this design. A numerical check rejects detectable mismatches, but
+orthogonality alone cannot prove the residual-forming provenance; the
+caller must supply the matching design. When supplied the residual bias is
+corrected; see \code{\link[=acvf_bias_matrix]{acvf_bias_matrix()}}.}
 
 \item{correction_max_lag}{Lag budget used to estimate and undo residual
 projection bias when \code{design} is supplied. This is independent of

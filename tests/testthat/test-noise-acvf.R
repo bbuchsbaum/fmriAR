@@ -226,7 +226,7 @@ test_that("noise_acvf reports whether correction was actually applied", {
   set.seed(62)
   n <- 100L
   X <- cbind(1, poly(seq_len(n), 3))
-  R <- matrix(rnorm(n * 5L), n, 5L)
+  R <- qr.resid(qr(X), matrix(rnorm(n * 5L), n, 5L))
 
   expect_warning(
     out <- noise_acvf(R, max_lag = 5L, design = X, correction_max_lag = 90L),

@@ -516,8 +516,12 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 #'   projection produced `resid`. Supplying it corrects the downward bias that
 #'   projecting a design out of the data puts into the autocovariance, and
 #'   hence into `phi`. Opt-in, because it changes estimates and needs the design
-#'   to be the one that actually formed the residuals. Currently supported for
-#'   `pooling = "global"` and `"run"` with `method = "ar"`.
+#'   to be the one that actually formed the OLS residuals. A numerical
+#'   orthogonality check rejects detectable mismatches, including typical raw,
+#'   GLS, robust, or unrelated residuals. Orthogonality cannot prove the exact
+#'   residual-forming provenance, so the caller remains responsible for
+#'   supplying the matching design. Currently supported for `pooling =
+#'   "global"` and `"run"` with `method = "ar"`.
 #' @param acvf_correction Precomputed bias matrices from [acvf_bias_matrix()],
 #'   as an alternative to `design` when many datasets share one design. A single
 #'   matrix is applied to every run; a list is matched against the runs in
@@ -688,9 +692,11 @@ fit_noise <- function(resid = NULL,
       stop("residual-bias correction applies to method = 'ar' only")
     }
     corr_by_run <- if (!is.null(design)) {
+      correction_lag <- .lag_budget(correction_max_lag,
+                                    "correction_max_lag", 1, n)
+      .validate_design_residuals(resid, design)
       .acvf_bias_by_run(design, n, runs = runs, censor = censor,
-                        max_lag = .lag_budget(correction_max_lag,
-                                              "correction_max_lag", 1, n))
+                        max_lag = correction_lag)
     } else {
       .normalize_correction(acvf_correction, length(Rsets))
     }

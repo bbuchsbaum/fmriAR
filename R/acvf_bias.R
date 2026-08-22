@@ -38,6 +38,50 @@
   .run_codes(runs, n)
 }
 
+# The design correction below is derived for ordinary least-squares residuals
+# r = (I - QQ') y. Supplying a different residual-forming operator asks the
+# correction to undo a projection that did not occur. Orthogonality to Q is a
+# necessary numerical invariant and catches ordinary mismatches, though it
+# cannot prove that this exact column space formed the residuals (for example,
+# residuals can also be orthogonal to a nested design). Provenance therefore
+# remains the caller's responsibility.
+.validate_design_residuals <- function(resid, design, tol = 1e-6) {
+  if (!is.matrix(resid)) resid <- as.matrix(resid)
+  if (!is.matrix(design)) design <- as.matrix(design)
+  storage.mode(resid) <- "double"
+  storage.mode(design) <- "double"
+
+  if (nrow(design) != nrow(resid)) {
+    stop("'design' must have one row per timepoint in 'resid' (", nrow(resid),
+         "), not ", nrow(design), call. = FALSE)
+  }
+  if (any(!is.finite(design))) {
+    stop("'design' contains NA, NaN, or Inf", call. = FALSE)
+  }
+
+  qrX <- qr(design)
+  if (qrX$rank == 0L || !length(resid)) return(invisible(0))
+  Q <- qr.Q(qrX)[, seq_len(qrX$rank), drop = FALSE]
+  resid_norm <- sqrt(sum(resid * resid))
+  if (!is.finite(resid_norm) || resid_norm == 0) return(invisible(0))
+
+  relative_projection <- sqrt(sum(crossprod(Q, resid)^2)) / resid_norm
+  if (!is.finite(relative_projection) || relative_projection > tol) {
+    message <- paste0(
+      "'resid' is not orthogonal to 'design' (relative projection ",
+      format(relative_projection, digits = 3), "). Design-based ACVF ",
+      "correction requires residuals numerically compatible with OLS ",
+      "residualization by this design; omit 'design' or supply the matching ",
+      "OLS residuals."
+    )
+    stop(structure(
+      list(message = message, call = NULL),
+      class = c("fmriAR_design_residual_mismatch", "error", "condition")
+    ))
+  }
+  invisible(relative_projection)
+}
+
 # S_k applied along the time axis to every row of B (each row an n-vector):
 #   (S_k v)[i] = v[i-k] + v[i+k], keeping only neighbours inside the same run.
 # S_0 is the identity.

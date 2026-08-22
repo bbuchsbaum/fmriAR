@@ -1,5 +1,15 @@
 # fmriAR 0.3.3
 
+## Fixes
+
+* `fit_noise(design =)` and `noise_acvf(design =)` now reject residuals that
+  are not numerically orthogonal to the supplied design. The correction is
+  derived for OLS residuals from that design's column space; applying it to raw
+  series or residuals from a different operator can silently undo a projection
+  that never occurred and substantially inflate estimated autocorrelation.
+  Orthogonality is a necessary check, not proof of provenance, so callers still
+  must supply the residual-forming design that was actually used.
+
 ## New
 
 * `fit_noise()` can now correct the residual bias in its autocovariance, via a

@@ -79,8 +79,11 @@ when computing autocorrelations. Each run's estimation uses only its own valid
 projection produced \code{resid}. Supplying it corrects the downward bias that
 projecting a design out of the data puts into the autocovariance, and
 hence into \code{phi}. Opt-in, because it changes estimates and needs the design
-to be the one that actually formed the residuals. Currently supported for
-\code{pooling = "global"} and \code{"run"} with \code{method = "ar"}.}
+to be the one that actually formed the OLS residuals. A numerical
+orthogonality check rejects detectable mismatches, including typical raw,
+GLS, robust, or unrelated residuals. Orthogonality cannot prove the exact
+residual-forming provenance, so the caller remains responsible for
+supplying the matching design. Currently supported for \code{pooling = "global"} and \code{"run"} with \code{method = "ar"}.}
 
 \item{acvf_correction}{Precomputed bias matrices from \code{\link[=acvf_bias_matrix]{acvf_bias_matrix()}},
 as an alternative to \code{design} when many datasets share one design. A single

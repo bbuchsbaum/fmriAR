@@ -23,8 +23,12 @@
 #'   one per run, `"parcel"` for one per parcel.
 #' @param parcels Parcel labels (length `ncol(resid)`), required when
 #'   `pooling = "parcel"`.
-#' @param design Optional design matrix whose projection produced `resid`. When
-#'   supplied the residual bias is corrected; see [acvf_bias_matrix()].
+#' @param design Optional design matrix whose projection produced `resid`. The
+#'   residuals must be ordinary least-squares residuals numerically orthogonal
+#'   to this design. A numerical check rejects detectable mismatches, but
+#'   orthogonality alone cannot prove the residual-forming provenance; the
+#'   caller must supply the matching design. When supplied the residual bias is
+#'   corrected; see [acvf_bias_matrix()].
 #' @param correction_max_lag Lag budget used to estimate and undo residual
 #'   projection bias when `design` is supplied. This is independent of
 #'   `max_lag`: correction needs enough tail information even when only a few
@@ -70,10 +74,12 @@ noise_acvf <- function(resid, runs = NULL, censor = NULL, max_lag = 20L,
   corr_by_run <- if (is.null(design)) {
     NULL
   } else {
+    correction_lag <- .lag_budget(correction_max_lag,
+                                  "correction_max_lag", 1, n)
+    .validate_design_residuals(resid, design)
     .drop_unusable_corrections(
       .acvf_bias_by_run(design, n, runs = runs, censor = censor,
-                        max_lag = .lag_budget(correction_max_lag,
-                                              "correction_max_lag", 1, n)))
+                        max_lag = correction_lag))
   }
 
   # Units to estimate over. "run" and "global" split by run; "global" then
