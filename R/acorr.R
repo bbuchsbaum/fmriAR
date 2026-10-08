@@ -4,7 +4,8 @@
 #' @param runs Optional run labels, length `nrow(resid)`. When supplied, each run
 #'   is centred separately and no lag product spans a run boundary.
 #' @param max_lag Maximum lag to evaluate.
-#' @param aggregate Aggregation across voxels: "mean", "median", or "none".
+#' @param aggregate How per-voxel autocorrelations are combined: "mean",
+#'   "median" (across voxels, lag by lag), or "none" (lags x voxels matrix).
 #' @return List of autocorrelation values and nominal confidence interval.
 #' @examples
 #' # Generate example residuals with some autocorrelation
@@ -37,27 +38,39 @@ acorr_diagnostics <- function(resid, runs = NULL, max_lag = 20L,
     seg_id <- .run_codes(runs, n)
   }
 
-  acf_one <- function(y) {
-    if (is.null(seg_id)) {
-      return(stats::acf(y, lag.max = max_lag, plot = FALSE, demean = TRUE)$acf[-1L])
-    }
-    g <- .acvf_from_pooled(
-      .pooled_acvf_segments(matrix(as.numeric(y), ncol = 1L), seg_id, max_lag,
-                            center_id = seg_id)
-    )
-    g <- c(g, rep(0, max_lag + 1L - length(g)))[seq_len(max_lag + 1L)]
-    if (!is.finite(g[1L]) || g[1L] <= 0) return(rep(NA_real_, max_lag))
-    g[-1L] / g[1L]
+  # Per-voxel autocorrelation, lags x voxels: sum_t y_t y_{t-k} / sum_t y_t^2
+  # with each voxel centred per run (or overall) and no lag product spanning a
+  # run boundary. Without runs this is exactly stats::acf().
+  if (is.null(seg_id)) seg_id <- rep(1L, n)
+  Rc <- resid
+  for (r in unique(seg_id)) {
+    rows <- which(seg_id == r)
+    Rc[rows, ] <- Rc[rows, , drop = FALSE] -
+      rep(colMeans(Rc[rows, , drop = FALSE]), each = length(rows))
   }
+  den <- colSums(Rc * Rc)
+  A <- matrix(NA_real_, max_lag, ncol(resid))
+  for (k in seq_len(max_lag)) {
+    if (k >= n) break
+    hi <- seq.int(k + 1L, n)
+    lo <- seq.int(1L, n - k)
+    ok <- seg_id[hi] == seg_id[lo]
+    A[k, ] <- if (any(ok)) {
+      colSums(Rc[hi[ok], , drop = FALSE] * Rc[lo[ok], , drop = FALSE]) / den
+    } else 0
+  }
+  A[, !(den > 0)] <- NA_real_
 
   if (aggregate == "none") {
-    A <- vapply(seq_len(ncol(resid)), function(j) acf_one(resid[, j]), numeric(max_lag))
     return(list(lags = seq_len(max_lag), acf = A, ci = ci))
   }
 
-  ybar <- switch(aggregate,
-                 mean = rowMeans(resid),
-                 median = apply(resid, 1L, stats::median))
-  a <- acf_one(ybar)
+  # Aggregate the per-voxel autocorrelations. Taking the autocorrelation of the
+  # voxel-mean series instead (as earlier versions did) measures the
+  # cross-voxel covariance, i.e. whatever signal is shared, and reported strong
+  # residual autocorrelation for voxels that were individually white.
+  a <- switch(aggregate,
+              mean = rowMeans(A, na.rm = TRUE),
+              median = apply(A, 1L, stats::median, na.rm = TRUE))
   list(lags = seq_len(max_lag), acf = a, ci = ci)
 }

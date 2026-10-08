@@ -37,7 +37,7 @@ test_that("arma_whiten_inplace applies AR(1) transform correctly", {
   X_exact <- X_orig + 0
   Y_exact <- Y_orig + 0
   res_exact <- arma_whiten_inplace(Y_exact, X_exact, phi = c(phi), theta = numeric(),
-                                   run_starts = 0L, exact_first_ar1 = TRUE,
+                                   run_starts = 0L, exact_first = TRUE,
                                    parallel = FALSE)
 
   expect_equal(dim(res_exact$X), dim(X_orig))
@@ -53,7 +53,7 @@ test_that("arma_whiten_inplace applies AR(1) transform correctly", {
   X_plain <- X_orig + 0
   Y_plain <- Y_orig + 0
   res_plain <- arma_whiten_inplace(Y_plain, X_plain, phi = c(phi), theta = numeric(),
-                                    run_starts = 0L, exact_first_ar1 = FALSE,
+                                    run_starts = 0L, exact_first = FALSE,
                                     parallel = FALSE)
   expect_equal(dim(res_plain$X), dim(X_orig))
   expect_equal(dim(res_plain$Y), dim(Y_orig))
@@ -73,7 +73,7 @@ test_that("arma_whiten_inplace handles AR(2) filters", {
   X_run <- X_orig + 0
   Y_run <- Y_orig + 0
   res <- arma_whiten_inplace(Y_run, X_run, phi = phi, theta = numeric(),
-                             run_starts = 0L, exact_first_ar1 = TRUE,
+                             run_starts = 0L, exact_first = TRUE,
                              parallel = FALSE)
 
   expect_equal(dim(res$X), dim(X_orig))
@@ -111,7 +111,7 @@ test_that("whitening reduces residual autocorrelation", {
   Y_in <- matrix(Y_vec, ncol = 1)
   whitened <- arma_whiten_inplace(Y = Y_in, X = X_in,
                                   phi = c(phi_hat), theta = numeric(),
-                                  run_starts = 0L, exact_first_ar1 = TRUE,
+                                  run_starts = 0L, exact_first = TRUE,
                                   parallel = FALSE)
 
   beta_gls <- qr.solve(whitened$X, drop(whitened$Y))
@@ -137,7 +137,7 @@ test_that("fit_noise and arma_whiten_inplace handle edge cases", {
   phi <- 0.5
 
   res <- arma_whiten_inplace(Y, X, phi = c(phi), theta = numeric(),
-                              run_starts = 0L, exact_first_ar1 = TRUE,
+                              run_starts = 0L, exact_first = TRUE,
                               parallel = FALSE)
   expect_equal(dim(res$X), dim(X))
   expect_equal(dim(res$Y), dim(Y))

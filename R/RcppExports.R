@@ -21,11 +21,23 @@ yw_from_acvf_cpp <- function(gamma, p) {
     .Call(`_fmriAR_yw_from_acvf_cpp`, gamma, p)
 }
 
-arma_whiten_inplace <- function(Y, X, phi, theta, run_starts, exact_first_ar1 = FALSE, parallel = TRUE) {
-    .Call(`_fmriAR_arma_whiten_inplace`, Y, X, phi, theta, run_starts, exact_first_ar1, parallel)
+pooled_acvf_seg_cpp <- function(mat, seg_id, max_lag) {
+    .Call(`_fmriAR_pooled_acvf_seg_cpp`, mat, seg_id, max_lag)
 }
 
-arma_whiten_void <- function(Y, X, phi, theta, run_starts, exact_first_ar1 = FALSE, parallel = TRUE) {
-    invisible(.Call(`_fmriAR_arma_whiten_void`, Y, X, phi, theta, run_starts, exact_first_ar1, parallel))
+hr_normal_eq_cpp <- function(Y, E, rel, p, q, start) {
+    .Call(`_fmriAR_hr_normal_eq_cpp`, Y, E, rel, p, q, start)
+}
+
+arma_whiten_inplace <- function(Y, X, phi, theta, run_starts, exact_first = FALSE, parallel = TRUE, n_threads = 0L) {
+    .Call(`_fmriAR_arma_whiten_inplace`, Y, X, phi, theta, run_starts, exact_first, parallel, n_threads)
+}
+
+arma_whiten_void <- function(Y, X, phi, theta, run_starts, exact_first = FALSE, parallel = TRUE, n_threads = 0L) {
+    invisible(.Call(`_fmriAR_arma_whiten_void`, Y, X, phi, theta, run_starts, exact_first, parallel, n_threads))
+}
+
+arma_acvf_cpp <- function(phi, theta, max_lag) {
+    .Call(`_fmriAR_arma_acvf_cpp`, phi, theta, max_lag)
 }
 

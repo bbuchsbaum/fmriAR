@@ -35,8 +35,8 @@ print.fmriAR_plan <- function(x, ...) {
         "\n", sep = "")
   }
 
-  exact_first <- if (isTRUE(x$exact_first)) "AR(1)" else "none"
-  cat("  Exact first-sample scaling: ", exact_first, "\n", sep = "")
+  exact_first <- if (isTRUE(x$exact_first)) "exact stationary" else "none"
+  cat("  Segment start: ", exact_first, "\n", sep = "")
 
   fmt_vec <- function(vec) {
     if (is.null(vec) || length(vec) == 0L) return("(none)")

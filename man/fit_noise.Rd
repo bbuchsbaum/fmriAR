@@ -47,15 +47,24 @@ indicates censored timepoints. Censored frames (e.g., motion-corrupted) are excl
 when computing autocorrelations. Each run's estimation uses only its own valid
 (non-censored) segments.}
 
-\item{method}{Either "ar" or "arma".}
+\item{method}{Either "ar" or "arma". ARMA models are estimated by a
+Hannan--Rissanen regression pooled over voxels (every voxel is treated as a
+replicate series sharing the coefficients), with all lags kept inside
+contiguous run/censor segments.}
 
-\item{p}{AR order (integer or "auto" if method == "ar").}
+\item{p}{AR order (integer or "auto" if method == "ar"). An explicit order
+is honoured even when it exceeds \code{p_max}.}
 
 \item{q}{MA order (integer).}
 
 \item{p_max}{Maximum AR order when \code{p = "auto"}.}
 
-\item{exact_first}{Apply exact AR(1) scaling at segment starts ("ar1" or "none").}
+\item{exact_first}{How \code{\link[=whiten_apply]{whiten_apply()}} treats the start of each run or
+post-censoring segment. \code{"ar1"} (default; the name is historical) applies
+the exact stationary initialisation of the fitted AR/ARMA model, i.e. exact
+GLS whitening within each segment; for AR(1) this is the familiar
+\code{sqrt(1 - phi^2)} scaling of the first sample. \code{"none"} uses the
+conditional filter with a zero pre-sample.}
 
 \item{pooling}{Combine parameters across runs or parcels ("global", "run", "parcel").}
 
@@ -113,15 +122,16 @@ is governed by \code{p_max} and the run length rather than by \code{p}, so
 \code{fit_noise(p = 1, p_max = 6)} returns seven values, not two. Under
 global pooling every run is truncated to the shortest available length
 before averaging, since a zero-padded autocovariance is not a valid
-covariance.
-\item \code{sigma2}: list of innovation variances, matching \code{gamma}, derived
-as \verb{gamma_0 - sum_k phi_k gamma_k} from the coefficients stored on the
-plan so the two are always mutually consistent. \code{NA} for
-\code{method = "arma"}, where no comparably cheap voxel-scale innovation
-variance is available, and \code{NA} whenever \code{gamma} does not reach lag
+covariance. Global AR coefficients are fitted by Yule--Walker on the
+frame-weighted average of the runs' autocorrelations.
+\item \code{sigma2}: list of innovation variances, matching \code{gamma}. For
+\code{method = "ar"} it is derived as \verb{gamma_0 - sum_k phi_k gamma_k} from
+the coefficients stored on the plan so the two are always mutually
+consistent, and is \code{NA} whenever \code{gamma} does not reach lag
 \code{length(phi)} -- heavy censoring can truncate it that far, and a
 partial sum would overstate the innovation variance rather than
-report that it is unavailable.
+report that it is unavailable. For \code{method = "arma"} it is the mean
+squared exact-whitened residual over all voxels and valid frames.
 \item \code{gamma_by_parcel}, \code{sigma2_by_parcel}: the same quantities per
 parcel when \code{pooling = "parcel"}, keyed like \code{phi_by_parcel}.
 }

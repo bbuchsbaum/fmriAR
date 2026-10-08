@@ -36,6 +36,29 @@
   out
 }
 
+.normalize_censor <- function(censor, n, arg = "censor") {
+  if (is.null(censor) || !length(censor)) return(NULL)
+  if (is.logical(censor)) {
+    # A logical mask must be converted with which(); as.integer() would turn it
+    # into a vector of 0s and 1s and silently censor timepoint 1 only.
+    if (length(censor) != n) {
+      stop("logical '", arg, "' must have one entry per timepoint (", n,
+           "), not ", length(censor), call. = FALSE)
+    }
+    if (anyNA(censor)) stop("'", arg, "' contains NA", call. = FALSE)
+    censor <- which(censor)
+  } else {
+    if (anyNA(censor) || any(!is.finite(censor)) || any(censor != trunc(censor))) {
+      stop("'", arg, "' must be whole-number timepoint indices or a logical mask",
+           call. = FALSE)
+    }
+    censor <- as.integer(censor)
+  }
+  censor <- sort(unique(censor))
+  censor <- censor[censor >= 1L & censor <= n]
+  if (!length(censor)) NULL else censor
+}
+
 .sub_run_starts <- function(n_run, censor_idx_rel = integer()) {
   starts <- 1L
   if (length(censor_idx_rel)) {
@@ -57,7 +80,8 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
                             phi_by_parcel = NULL, theta_by_parcel = NULL,
                             censor = NULL,
                             gamma = NULL, sigma2 = NULL,
-                            gamma_by_parcel = NULL, sigma2_by_parcel = NULL) {
+                            gamma_by_parcel = NULL, sigma2_by_parcel = NULL,
+                            n_time = NULL) {
   structure(
     list(
       phi = phi,
@@ -79,17 +103,25 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
       gamma = gamma,
       sigma2 = sigma2,
       gamma_by_parcel = gamma_by_parcel,
-      sigma2_by_parcel = sigma2_by_parcel
+      sigma2_by_parcel = sigma2_by_parcel,
+      # Number of timepoints the plan was fitted on, so whiten_apply() can tell
+      # whether the stored runs/censor describe the data it is given.
+      n_time = n_time
     ),
     class = "fmriAR_plan"
   )
+}
+
+.n_threads <- function() {
+  k <- getOption("fmriAR.max_threads", NA_integer_)
+  if (length(k) != 1L || is.na(k) || !is.finite(k) || k < 1) 0L else as.integer(k)
 }
 
 .arma_innovations <- function(y, phi, theta) {
   Y <- matrix(as.numeric(y), ncol = 1L)
   X <- matrix(0, nrow = length(y), ncol = 1L)
   out <- arma_whiten_inplace(Y, X, phi, theta, run_starts = 0L,
-                             exact_first_ar1 = FALSE, parallel = FALSE)
+                             exact_first = FALSE, parallel = FALSE)
   drop(out$Y)
 }
 
@@ -148,18 +180,10 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
     mu <- rowsum(mat, grp, reorder = TRUE) / as.numeric(table(grp))
     mat <- mat - mu[grp, , drop = FALSE]
   }
-  num[1L] <- sum(mat * mat) / nc
-  pairs[1L] <- nv
-  for (lg in seq_len(max_lag)) {
-    if (nv <= lg) break
-    hi <- seq.int(lg + 1L, nv)
-    lo <- seq.int(1L, nv - lg)
-    ok <- seg_id[hi] == seg_id[lo]
-    if (!any(ok)) next
-    num[lg + 1L] <- sum(mat[hi[ok], , drop = FALSE] * mat[lo[ok], , drop = FALSE]) / nc
-    pairs[lg + 1L] <- sum(ok)
-  }
-  list(num = num, pairs = pairs)
+  # seg_id labels contiguous segments; lag products stay inside one.
+  storage.mode(mat) <- "double"
+  out <- pooled_acvf_seg_cpp(mat, as.integer(seg_id), as.integer(max_lag))
+  list(num = as.numeric(out$num), pairs = as.numeric(out$pairs))
 }
 
 # Highest lag with any contributing pairs; -1 when the pooled acvf is empty.
@@ -438,14 +462,17 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
   # is honoured as given; this bounds only the search.
   p_sel <- min(p_cap, floor(n / 5))
   n_log <- log(n)
-  best <- list(bic = 2 * n * log(pmax(gamma0[1], 1e-12)) + n_log,
+  # BIC = n log(sigma2) + k log(n); -2 log L of a Gaussian AR is n log(sigma2)
+  # up to a constant. A factor of 2 on the fit term halves the penalty and
+  # over-selects the order.
+  best <- list(bic = n * log(pmax(gamma0[1], 1e-12)) + n_log,
                phi = numeric(0), p = 0L, sigma2 = gamma0[1])
   for (pp in seq_len(max(0L, p_sel))) {
     f <- fit_order(pp)
     # enforce_stationary_ar() returns length 0 when it cannot produce a
     # stationary filter, which must not be recorded as an order-pp fit.
     if (!is.finite(f$sigma2) || length(f$phi) != pp || !all(is.finite(f$phi))) next
-    bic <- 2 * n * log(f$sigma2) + (pp + 1L) * n_log
+    bic <- n * log(f$sigma2) + (pp + 1L) * n_log
     if (is.finite(bic) && bic < best$bic) {
       best <- list(bic = bic, phi = f$phi, p = pp, sigma2 = f$sigma2)
     }
@@ -483,6 +510,56 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
   runs
 }
 
+# AR coefficients for global pooling from the length-weighted average of the
+# runs' bias-corrected autocorrelations. Each run's vector is truncated to the
+# common length; the average is PD-repaired at each candidate order before the
+# Yule-Walker solve, and under p = "auto" the order is chosen by BIC on the
+# pooled frame count. Returns NULL when no run supplied an autocovariance.
+.ar_from_pooled_runs <- function(estimates, lens, p) {
+  graw <- lapply(estimates, function(e) e$gamma_raw)
+  ok <- !vapply(graw, is.null, logical(1)) & vapply(graw, length, 0L) > 0L & lens > 0
+  if (!any(ok)) return(NULL)
+  L <- min(vapply(graw[ok], length, 0L))
+  w <- lens[ok] / sum(lens[ok])
+  # Pool autocorrelations, not autocovariances, so that a run is weighted by
+  # its frame count and not also by its variance (runs routinely differ in
+  # scale). For AR(1) this reproduces the length-weighted average of per-run
+  # coefficients exactly; averaging correlation sequences preserves positive
+  # definiteness by convexity.
+  if (any(vapply(graw[ok], function(g) !is.finite(g[1]) || g[1] <= 0, TRUE))) return(NULL)
+  Rho <- do.call(rbind, lapply(graw[ok], function(g) g[seq_len(L)] / g[1]))
+  g0 <- sum(w * vapply(graw[ok], function(g) g[1], 0))
+  g <- g0 * as.numeric(drop(crossprod(w, Rho)))
+  if (!is.finite(g[1]) || g[1] <= 0) return(NULL)
+  p_cap <- L - 1L
+  fit_order <- function(pp) {
+    gp <- .shrink_to_pd(g[seq_len(pp + 1L)])
+    yw <- yw_from_acvf_fast(gp, pp)
+    list(phi = enforce_stationary_ar(yw$phi, 0.99), sigma2 = pmax(yw$sigma2, 1e-12))
+  }
+  if (!identical(p, "auto")) {
+    pp <- min(as.integer(p), p_cap)
+    if (pp <= 0L) return(numeric(0))
+    return(fit_order(pp)$phi)
+  }
+  n_eff <- sum(vapply(estimates[ok], function(e) e$n_eff %||% 0L, 0))
+  if (n_eff <= 0) n_eff <- sum(lens[ok])
+  # Same data-bounded search as the per-run path, on the pooled frame count.
+  p_sel <- min(p_cap, floor(n_eff / 5))
+  best_phi <- numeric(0)
+  best_bic <- n_eff * log(g[1]) + log(n_eff)
+  for (pp in seq_len(max(0L, p_sel))) {
+    f <- fit_order(pp)
+    if (length(f$phi) != pp || !all(is.finite(f$phi))) next
+    bic <- n_eff * log(f$sigma2) + (pp + 1L) * log(n_eff)
+    if (is.finite(bic) && bic < best_bic) {
+      best_bic <- bic
+      best_phi <- f$phi
+    }
+  }
+  best_phi
+}
+
 # Exported API -----------------------------------------------------------------
 
 #' Fit an AR/ARMA noise model (run-aware) and return a whitening plan
@@ -498,11 +575,20 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 #'   indicates censored timepoints. Censored frames (e.g., motion-corrupted) are excluded
 #'   when computing autocorrelations. Each run's estimation uses only its own valid
 #'   (non-censored) segments.
-#' @param method Either "ar" or "arma".
-#' @param p AR order (integer or "auto" if method == "ar").
+#' @param method Either "ar" or "arma". ARMA models are estimated by a
+#'   Hannan--Rissanen regression pooled over voxels (every voxel is treated as a
+#'   replicate series sharing the coefficients), with all lags kept inside
+#'   contiguous run/censor segments.
+#' @param p AR order (integer or "auto" if method == "ar"). An explicit order
+#'   is honoured even when it exceeds `p_max`.
 #' @param q MA order (integer).
 #' @param p_max Maximum AR order when `p = "auto"`.
-#' @param exact_first Apply exact AR(1) scaling at segment starts ("ar1" or "none").
+#' @param exact_first How [whiten_apply()] treats the start of each run or
+#'   post-censoring segment. `"ar1"` (default; the name is historical) applies
+#'   the exact stationary initialisation of the fitted AR/ARMA model, i.e. exact
+#'   GLS whitening within each segment; for AR(1) this is the familiar
+#'   `sqrt(1 - phi^2)` scaling of the first sample. `"none"` uses the
+#'   conditional filter with a zero pre-sample.
 #' @param pooling Combine parameters across runs or parcels ("global", "run", "parcel").
 #' @param parcels Integer vector (length = ncol(resid)) giving fine parcel memberships when `pooling = "parcel"`.
 #' @param parcel_sets Optional named list with entries `coarse`, `medium`, `fine` of equal length specifying nested parcel labels for multi-scale pooling.
@@ -546,15 +632,16 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 #'       `fit_noise(p = 1, p_max = 6)` returns seven values, not two. Under
 #'       global pooling every run is truncated to the shortest available length
 #'       before averaging, since a zero-padded autocovariance is not a valid
-#'       covariance.
-#'     \item `sigma2`: list of innovation variances, matching `gamma`, derived
-#'       as `gamma_0 - sum_k phi_k gamma_k` from the coefficients stored on the
-#'       plan so the two are always mutually consistent. `NA` for
-#'       `method = "arma"`, where no comparably cheap voxel-scale innovation
-#'       variance is available, and `NA` whenever `gamma` does not reach lag
+#'       covariance. Global AR coefficients are fitted by Yule--Walker on the
+#'       frame-weighted average of the runs' autocorrelations.
+#'     \item `sigma2`: list of innovation variances, matching `gamma`. For
+#'       `method = "ar"` it is derived as `gamma_0 - sum_k phi_k gamma_k` from
+#'       the coefficients stored on the plan so the two are always mutually
+#'       consistent, and is `NA` whenever `gamma` does not reach lag
 #'       `length(phi)` -- heavy censoring can truncate it that far, and a
 #'       partial sum would overstate the innovation variance rather than
-#'       report that it is unavailable.
+#'       report that it is unavailable. For `method = "arma"` it is the mean
+#'       squared exact-whitened residual over all voxels and valid frames.
 #'     \item `gamma_by_parcel`, `sigma2_by_parcel`: the same quantities per
 #'       parcel when `pooling = "parcel"`, keyed like `phi_by_parcel`.
 #'   }
@@ -644,21 +731,22 @@ fit_noise <- function(resid = NULL,
     multiscale_mode <- NULL
   }
 
+  if (!identical(p, "auto")) {
+    if (length(p) != 1L || !is.numeric(p) || !is.finite(p) || p < 0 || p != trunc(p)) {
+      stop("'p' must be \"auto\" or a single non-negative whole number", call. = FALSE)
+    }
+    # An explicitly requested order is honoured as given; p_max bounds only the
+    # automatic search. Capping here silently turned p = 8 into an AR(6).
+    p_max <- max(as.integer(p_max), as.integer(p))
+  }
+
   n <- nrow(resid)
   if (n < 10) stop("series too short")
   if (any(!is.finite(resid))) stop("'resid' contains NA, NaN, or Inf")
 
 
   # Normalize censor input: convert logical to integer indices
-  if (!is.null(censor)) {
-    if (is.logical(censor)) {
-      stopifnot(length(censor) == n)
-      censor <- which(censor)
-    }
-    censor <- sort(unique(as.integer(censor)))
-    censor <- censor[censor >= 1L & censor <= n]
-    if (!length(censor)) censor <- NULL
-  }
+  censor <- .normalize_censor(censor, n)
 
   Rsets <- .run_sets(runs, n)
 
@@ -743,6 +831,13 @@ fit_noise <- function(resid = NULL,
       gamma_full <- .acvf_from_pooled(pooled, order = p_cap, correction = corr)
       null_fit$gamma <- gamma_full
       null_fit$sigma2 <- gamma_full[1]
+      # Bias-corrected but not yet PD-repaired autocovariance, for global
+      # pooling: averaging these across runs and repairing once at each
+      # candidate order uses all runs' information in the Yule-Walker solve.
+      gamma_raw <- .acvf_from_pooled(pooled, order = p_cap, correction = corr,
+                                     tol = -Inf)
+      null_fit$gamma_raw <- gamma_raw
+      null_fit$n_eff <- n_eff
 
       if (!identical(p, "auto")) {
         pp <- min(as.integer(p), p_cap)
@@ -751,14 +846,15 @@ fit_noise <- function(resid = NULL,
         yw <- yw_from_acvf_fast(gamma_pp[seq_len(pp + 1L)], pp)
         return(list(phi = enforce_stationary_ar(yw$phi, 0.99),
                     theta = numeric(0), order = c(p = pp, q = 0L),
-                    gamma = gamma_full, sigma2 = pmax(yw$sigma2, 1e-12)))
+                    gamma = gamma_full, sigma2 = pmax(yw$sigma2, 1e-12),
+                    gamma_raw = gamma_raw, n_eff = n_eff))
       }
 
       best_phi <- numeric(0)
       best_order <- c(p = 0L, q = 0L)
       n_eff_log <- log(n_eff)
       sigma0 <- pmax(gamma0[1], 1e-12)
-      best_bic <- 2 * n_eff * log(sigma0) + n_eff_log
+      best_bic <- n_eff * log(sigma0) + n_eff_log
       best_sigma2 <- sigma0
       # Bound the order BIC may select by available data; an explicit p is honoured.
       p_sel <- min(p_cap, floor(n_eff / 5))
@@ -768,7 +864,7 @@ fit_noise <- function(resid = NULL,
           yw <- yw_from_acvf_fast(gamma_pp[seq_len(pp + 1L)], pp)
           sigma2 <- pmax(yw$sigma2, 1e-12)
           if (!is.finite(sigma2)) next
-          bic <- 2 * n_eff * log(sigma2) + (pp + 1L) * n_eff_log
+          bic <- n_eff * log(sigma2) + (pp + 1L) * n_eff_log
           if (!is.finite(bic) || bic >= best_bic) next
           phi_pp <- enforce_stationary_ar(yw$phi, 0.99)
           if (length(phi_pp) != pp || !all(is.finite(phi_pp))) next
@@ -779,39 +875,31 @@ fit_noise <- function(resid = NULL,
         }
       }
       list(phi = best_phi, theta = numeric(0), order = best_order,
-           gamma = gamma_full, sigma2 = best_sigma2)
+           gamma = gamma_full, sigma2 = best_sigma2,
+           gamma_raw = gamma_raw, n_eff = n_eff)
     } else {
-      # For ARMA: use valid timepoints only.
-      #
-      # Censored frames are dropped, but Hannan-Rissanen then runs on the
-      # surviving frames spliced together, so its regressions do span the gaps.
-      # That biases the estimate (an ARMA(1,1) with theta = 0.4 comes back near
-      # 0.30 at 25% censoring). Segmenting it properly is a larger change than
-      # this release carries, so warn rather than fail silently.
-      if (length(censor_rel) && any(diff(valid_idx) > 1L)) {
-        warning("fit_noise: method = 'arma' estimates across censoring gaps; ",
-                "AR and MA coefficients will be biased. Prefer method = 'ar' ",
-                "when censoring is present.", call. = FALSE)
-      }
+      # ARMA: pooled, segment-aware Hannan-Rissanen over this run's valid
+      # frames (see .hr_arma_pooled). Lag products never span a censoring gap.
       mat_valid <- mat[valid_idx, , drop = FALSE]
-      y_mean <- rowMeans(mat_valid)
+      seg_id_ma <- cumsum(c(1L, as.integer(diff(valid_idx) > 1L)))
+      unit <- list(mat = mat_valid,
+                   starts0 = as.integer(which(!duplicated(seg_id_ma)) - 1L))
       pp <- if (identical(p, "auto")) min(2L, p_max) else as.integer(p)
       qq <- as.integer(q)
-      fit <- hr_arma(y_mean, p = pp, q = qq, iter = as.integer(hr_iter),
-                     step1 = step1)
 
-      # Report the noise autocovariance at voxel scale, pooled the same way the
-      # AR path does. hr_arma's own sigma2 is the innovation variance of the
-      # run-MEAN series, which is smaller than the per-voxel value by roughly
-      # the number of voxels averaged -- reporting it as the plan's sigma2 would
-      # understate the noise by that factor. There is no comparably cheap
-      # voxel-scale innovation variance for ARMA, so it is left NA rather than
-      # filled with a number on the wrong scale.
-      seg_id_ma <- cumsum(c(1L, as.integer(diff(valid_idx) > 1L)))
       lag_ma <- max(1L, pp + qq)
       pooled_ma <- .pooled_acvf_segments(mat_valid, seg_id_ma, lag_ma)
-      fit$gamma <- .acvf_from_pooled(pooled_ma, order = lag_ma)
-      fit$sigma2 <- NA_real_
+      gamma_ma <- .acvf_from_pooled(pooled_ma, order = lag_ma)
+
+      if (identical(pooling, "global")) {
+        # Estimated once over all runs below.
+        return(list(phi = numeric(0), theta = numeric(0),
+                    order = c(p = pp, q = qq), gamma = gamma_ma,
+                    sigma2 = NA_real_, unit = unit))
+      }
+      fit <- .hr_arma_pooled(list(unit), pp, qq, iter = as.integer(hr_iter))
+      fit$gamma <- gamma_ma
+      fit$unit <- unit
       fit
     }
   }
@@ -867,10 +955,12 @@ fit_noise <- function(resid = NULL,
         shrink <- 0.6
         acvf_mat <- vapply(est_f$acvf, function(g) .ms_pad(g, target + 1L), numeric(target + 1L))
         avg_g <- rowMeans(acvf_mat, na.rm = TRUE)
+        yw_order <- .ms_yw_order(p, target, list(est_f$phi))
         phi_parcel <- lapply(est_f$acvf, function(g) {
+          if (yw_order == 0L) return(numeric(0))
           g_pad <- .ms_pad(g, target + 1L)
           g_mix <- (1 - shrink) * g_pad + shrink * avg_g
-          yw <- yw_from_acvf_fast(g_mix, target)
+          yw <- yw_from_acvf_fast(g_mix[seq_len(yw_order + 1L)], yw_order)
           enforce_stationary_ar(yw$phi)
         })
       }
@@ -920,7 +1010,8 @@ fit_noise <- function(resid = NULL,
           sizes = sizes,
           disp_list = disp_list,
           p_target = target,
-          mode = multiscale_mode
+          mode = multiscale_mode,
+          yw_order = .ms_yw_order(p, target, list(est_c$phi, est_m$phi, est_f$phi))
         )
       }
     }
@@ -993,7 +1084,8 @@ fit_noise <- function(resid = NULL,
       theta_by_parcel = theta_parcel,
       censor = censor,
       gamma_by_parcel = gamma_parcel,
-      sigma2_by_parcel = sigma2_parcel
+      sigma2_by_parcel = sigma2_parcel,
+      n_time = n
     ))
   }
 
@@ -1020,14 +1112,34 @@ fit_noise <- function(resid = NULL,
       if (length(estimates[[i]]$theta)) Th[i, seq_along(estimates[[i]]$theta)] <- estimates[[i]]$theta
     }
     w <- lens / sum(lens)
-    # Averaging per-run coefficient vectors does not preserve stationarity (or
-    # invertibility), and runs that selected a lower order are zero-padded to the
-    # longest before averaging, so the pooled vector need not be a valid AR of
-    # any run. Re-impose the constraints on the pooled result.
-    phi_pooled <- as.numeric(drop(crossprod(w, Phi)))
-    theta_pooled <- as.numeric(drop(crossprod(w, Th)))
-    if (length(phi_pooled)) phi_pooled <- enforce_stationary_ar(phi_pooled, 0.99)
-    if (length(theta_pooled)) theta_pooled <- enforce_invertible_ma(theta_pooled)
+    phi_pooled <- NULL
+    theta_pooled <- NULL
+    arma_sigma2 <- NA_real_
+    if (identical(method, "arma")) {
+      # One pooled Hannan-Rissanen fit over every run's segments.
+      units <- lapply(estimates, `[[`, "unit")
+      units <- units[!vapply(units, is.null, logical(1))]
+      pp <- if (identical(p, "auto")) min(2L, p_max) else as.integer(p)
+      fit <- .hr_arma_pooled(units, pp, as.integer(q), iter = as.integer(hr_iter))
+      phi_pooled <- fit$phi
+      theta_pooled <- fit$theta
+      arma_sigma2 <- fit$sigma2
+    } else {
+      # Yule-Walker on the run-pooled autocovariance rather than averaging
+      # per-run coefficients: averaged coefficients need not be stationary,
+      # runs that selected a lower order were zero-padded, and each run's
+      # estimate used only its own frames.
+      phi_pooled <- .ar_from_pooled_runs(estimates, lens, p)
+    }
+    if (is.null(phi_pooled)) {
+      # Fallback: length-weighted coefficient average, re-constrained.
+      phi_pooled <- as.numeric(drop(crossprod(w, Phi)))
+      if (length(phi_pooled)) phi_pooled <- enforce_stationary_ar(phi_pooled, 0.99)
+    }
+    if (is.null(theta_pooled)) {
+      theta_pooled <- as.numeric(drop(crossprod(w, Th)))
+      if (length(theta_pooled)) theta_pooled <- enforce_invertible_ma(theta_pooled)
+    }
     phi_list <- list(phi_pooled)
     theta_list <- list(theta_pooled)
     # Pool the autocovariance length-weighted, but TRUNCATE every run to the
@@ -1050,14 +1162,14 @@ fit_noise <- function(resid = NULL,
     } else {
       list(numeric(0))
     }
-    sigma2_list <- list(if (identical(method, "arma")) NA_real_ else
+    sigma2_list <- list(if (identical(method, "arma")) arma_sigma2 else
       .sigma2_from_gamma_phi(gamma_list[[1]], phi_pooled))
   } else {
     phi_list <- lapply(estimates, `[[`, "phi")
     theta_list <- lapply(estimates, `[[`, "theta")
     gamma_list <- lapply(estimates, function(e) e$gamma %||% numeric(0))
     sigma2_list <- if (identical(method, "arma")) {
-      rep(list(NA_real_), length(estimates))
+      lapply(estimates, function(e) e$sigma2 %||% NA_real_)
     } else {
       mapply(.sigma2_from_gamma_phi, gamma_list, phi_list, SIMPLIFY = FALSE)
     }
@@ -1079,7 +1191,8 @@ fit_noise <- function(resid = NULL,
     pooling = pooling,
     censor = censor,
     gamma = gamma_list,
-    sigma2 = sigma2_list
+    sigma2 = sigma2_list,
+    n_time = n
   )
 }
 
@@ -1091,11 +1204,21 @@ fit_noise <- function(resid = NULL,
 #' @param runs Optional run labels, one per row. Each label must occupy one
 #'   contiguous block and may not be missing.
 #' @param run_starts Optional 0-based run start indices (alternative to `runs`).
-#' @param censor Optional indices of censored TRs (1-based); filter resets after gaps.
+#' @param censor Optional censored timepoints: 1-based indices or a logical mask
+#'   of length `nrow(Y)`. The filter restarts (with exact stationary
+#'   initialisation when the plan uses `exact_first`) at the first frame after
+#'   each censored one. When omitted and the plan was fitted on data with the
+#'   same number of timepoints, the plan's own `censor` set is used.
 #' @param parcels Optional parcel labels (length = ncol(Y)) when using parcel plans.
-#' @param inplace Modify inputs in place (logical).
-#' @param parallel Use OpenMP parallelism if available.
-#' @return List with whitened data. Parcel plans return `X_by` per parcel; others return a single `X` matrix.
+#' @param inplace Retained for backward compatibility. R's copy semantics mean
+#'   the inputs are never modified; `TRUE` only makes the result invisible.
+#' @param parallel Use OpenMP parallelism if available. The thread count can be
+#'   capped with `options(fmriAR.max_threads = k)`.
+#' @return List with whitened data. Parcel plans return `X_by` per parcel; others
+#'   return a single `X` matrix. When censoring is in effect the list also
+#'   carries `censor`, the censored row indices. Those rows are still present in
+#'   `X`/`Y` (filtered from the preceding history) and should be dropped before
+#'   fitting, e.g. `lm.fit(out$X[-out$censor, ], out$Y[-out$censor, ])`.
 #' @examples
 #' # Create example design matrix and data
 #' n_time <- 200
@@ -1132,6 +1255,16 @@ whiten_apply <- function(plan, X, Y, runs = NULL, run_starts = NULL, censor = NU
   if (is.null(runs) && !is.null(plan$runs) && length(plan$runs) == n) runs <- plan$runs
   if (is.null(runs)) runs <- rep_len(1L, n)
 
+  # Censoring is part of the noise model's segment structure just as runs are.
+  # Fall back to the plan's own censor set when it was fitted on data of this
+  # length, mirroring the runs fallback above; otherwise a plan fitted with
+  # censoring whitened straight across the scrubbed frames.
+  censor <- .normalize_censor(censor, n)
+  if (is.null(censor) && !is.null(plan$censor) &&
+      identical(as.integer(plan$n_time), as.integer(n))) {
+    censor <- .normalize_censor(plan$censor, n)
+  }
+
   # Validate rather than let split() recycle or drop. A short `runs` was
   # silently recycled, and an NA left that row unwritten in both X and Y.
   runs <- .run_codes(runs, n, arg = "runs")
@@ -1153,6 +1286,15 @@ whiten_apply <- function(plan, X, Y, runs = NULL, run_starts = NULL, censor = NU
     Yw <- matrix(NA_real_, n, ncol(Y))
     X_by <- setNames(vector("list", length(parcel_ids)), as.character(parcel_ids))
     X_base <- X
+    # The design depends only on the filter, not on the parcel. Parcels sharing
+    # coefficients (common after multiscale shrinkage or with a single AFNI
+    # spec) reuse one whitened design rather than re-filtering and storing a
+    # fresh copy each.
+    X_cache <- list()
+    filter_key <- function(phi, theta) {
+      paste(paste(sprintf("%.17g", phi), collapse = ","),
+            paste(sprintf("%.17g", theta), collapse = ","), sep = "|")
+    }
 
     for (pid in parcel_ids) {
       cols <- which(parcels_vec == pid)
@@ -1163,36 +1305,50 @@ whiten_apply <- function(plan, X, Y, runs = NULL, run_starts = NULL, censor = NU
       theta <- theta_by[[key]]
       if (is.null(theta)) theta <- numeric(0)
       Y_sub <- Y[, cols, drop = FALSE]
+      fk <- filter_key(phi, theta)
+      have_x <- !is.null(X_cache[[fk]])
       # arma_whiten_inplace() writes through its arguments. Assigning X_base
       # without subsetting shares storage with the caller's X, so every parcel
       # filtered the previous parcel's output, all X_by entries aliased one
       # matrix, and the caller's design was silently overwritten.
-      X_sub <- X_base[seq_len(n), , drop = FALSE]
+      X_sub <- if (have_x) matrix(0, n, 0L) else X_base[seq_len(n), , drop = FALSE]
       out <- arma_whiten_inplace(
         Y = Y_sub,
         X = X_sub,
         phi = phi,
         theta = theta,
         run_starts = run_starts_vec,
-        exact_first_ar1 = isTRUE(plan$exact_first),
-        parallel = parallel
+        exact_first = isTRUE(plan$exact_first),
+        parallel = parallel,
+        n_threads = .n_threads()
       )
       Yw[, cols] <- out$Y
-      X_by[[key]] <- out$X
+      if (!have_x) X_cache[[fk]] <- out$X
+      X_by[[key]] <- X_cache[[fk]]
     }
 
-    if (inplace) {
-      Y[,] <- Yw
-      return(invisible(list(X = NULL, X_by = X_by, Y = Y)))
-    }
-    return(list(X = NULL, X_by = X_by, Y = Yw))
+    out <- list(X = NULL, X_by = X_by, Y = Yw)
+    if (!is.null(censor)) out$censor <- censor
+    if (inplace) return(invisible(out))
+    return(out)
   }
 
   rsplits <- split(seq_len(n), as.integer(runs))
 
+  # A per-run plan carries one coefficient set per run. Applying it to data with
+  # a different number of runs silently paired runs with the wrong (or no)
+  # coefficients.
+  n_runs <- length(rsplits)
+  for (nm in c("phi", "theta")) {
+    k <- length(plan[[nm]])
+    if (k != 1L && k != n_runs) {
+      stop("whiten_apply: the plan has ", k, " '", nm, "' sets (one per run it ",
+           "was fitted on) but the data have ", n_runs, " runs", call. = FALSE)
+    }
+  }
+
   censor_by_run <- lapply(rsplits, function(idx) integer(0L))
   if (!is.null(censor)) {
-    censor <- as.integer(censor)
     for (ri in seq_along(rsplits)) {
       idx <- rsplits[[ri]]
       c_in <- intersect(censor, idx)
@@ -1221,20 +1377,17 @@ whiten_apply <- function(plan, X, Y, runs = NULL, run_starts = NULL, censor = NU
       phi = phi_list[[ri]],
       theta = theta_list[[ri]],
       run_starts = rs,
-      exact_first_ar1 = isTRUE(plan$exact_first),
-      parallel = parallel
+      exact_first = isTRUE(plan$exact_first),
+      parallel = parallel,
+      n_threads = .n_threads()
     )
     Xw[idx, ] <- out$X
     Yw[idx, ] <- out$Y
   }
 
-  if (inplace) {
-    X[,] <- Xw
-    Y[,] <- Yw
-    invisible(list(X = X, Y = Y))
-  } else {
-    list(X = Xw, Y = Yw)
-  }
+  out <- list(X = Xw, Y = Yw)
+  if (!is.null(censor)) out$censor <- censor
+  if (inplace) invisible(out) else out
 }
 
 #' Fit and apply whitening in one call

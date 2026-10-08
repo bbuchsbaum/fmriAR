@@ -61,15 +61,7 @@ noise_acvf <- function(resid, runs = NULL, censor = NULL, max_lag = 20L,
   max_lag <- .lag_budget(max_lag, "max_lag", 0, n)
   if (any(!is.finite(resid))) stop("'resid' contains NA, NaN, or Inf")
 
-  if (!is.null(censor)) {
-    if (is.logical(censor)) {
-      stopifnot(length(censor) == n)
-      censor <- which(censor)
-    }
-    censor <- sort(unique(as.integer(censor)))
-    censor <- censor[censor >= 1L & censor <= n]
-    if (!length(censor)) censor <- NULL
-  }
+  censor <- .normalize_censor(censor, n)
 
   corr_by_run <- if (is.null(design)) {
     NULL

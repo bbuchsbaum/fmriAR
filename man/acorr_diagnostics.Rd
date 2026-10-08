@@ -19,7 +19,8 @@ is centred separately and no lag product spans a run boundary.}
 
 \item{max_lag}{Maximum lag to evaluate.}
 
-\item{aggregate}{Aggregation across voxels: "mean", "median", or "none".}
+\item{aggregate}{How per-voxel autocorrelations are combined: "mean",
+"median" (across voxels, lag by lag), or "none" (lags x voxels matrix).}
 }
 \value{
 List of autocorrelation values and nominal confidence interval.

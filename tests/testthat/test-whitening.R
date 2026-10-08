@@ -13,7 +13,7 @@ test_that("AR(1) whitening reduces lag-1 autocorrelation", {
     phi = phi,
     theta = numeric(0),
     run_starts = 0L,
-    exact_first_ar1 = TRUE,
+    exact_first = TRUE,
     parallel = FALSE
   )
   yw <- drop(out$Y)
@@ -54,11 +54,11 @@ test_that("run-specific parameters are applied per segment", {
 
   manual1 <- arma_whiten_inplace(matrix(y1, ncol = 1L), matrix(1, n1, 1L),
                                  phi = phi1, theta = numeric(0),
-                                 run_starts = 0L, exact_first_ar1 = FALSE,
+                                 run_starts = 0L, exact_first = FALSE,
                                  parallel = FALSE)
   manual2 <- arma_whiten_inplace(matrix(y2, ncol = 1L), matrix(1, n2, 1L),
                                  phi = phi2, theta = numeric(0),
-                                 run_starts = 0L, exact_first_ar1 = FALSE,
+                                 run_starts = 0L, exact_first = FALSE,
                                  parallel = FALSE)
 
   expect_equal(out$Y[seq_len(n1), , drop = FALSE], manual1$Y)
@@ -91,7 +91,7 @@ test_that("censor gaps reset the whitening recursions", {
   out_manual <- arma_whiten_inplace(Y, X,
                                     phi = phi, theta = numeric(0),
                                     run_starts = run_starts,
-                                    exact_first_ar1 = FALSE,
+                                    exact_first = FALSE,
                                     parallel = FALSE)
 
   expect_equal(out_plan$Y, out_manual$Y)
@@ -196,7 +196,7 @@ test_that("ARMA(1,1) whitening yields near-white innovations", {
   out <- arma_whiten_inplace(Y, X,
                              phi = phi, theta = theta,
                              run_starts = 0L,
-                             exact_first_ar1 = FALSE,
+                             exact_first = FALSE,
                              parallel = FALSE)
   innovations <- drop(out$Y)
   acf_vals <- stats::acf(innovations, lag.max = 10, plot = FALSE, demean = TRUE)$acf[-1L]

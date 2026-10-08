@@ -676,22 +676,23 @@ test_that("stationarity is enforced on every returned plan", {
   }
 })
 
-test_that("ARMA warns rather than silently biasing across censoring gaps", {
-  # Hannan-Rissanen runs on the surviving frames spliced together, so its
-  # regressions span censoring gaps and bias the coefficients. Documented and
-  # warned about rather than left silent.
-  resid <- sapply(1:10, function(i) as.numeric(stats::arima.sim(list(ar = 0.5, ma = 0.4), 300L)))
-  cens <- seq(10L, 290L, by = 10L)
-
-  expect_warning(
-    fmriAR::fit_noise(resid, method = "arma", p = 1L, q = 1L,
-                      pooling = "global", censor = cens),
-    "censoring gaps"
-  )
-  # No censoring, no warning.
-  expect_silent(
-    fmriAR::fit_noise(resid, method = "arma", p = 1L, q = 1L, pooling = "global")
-  )
+test_that("ARMA estimation respects censoring gaps instead of splicing them", {
+  # Hannan-Rissanen used to run on the surviving frames spliced together, so
+  # its regressions spanned censoring gaps (theta = 0.4 came back near 0.30 at
+  # 25% censoring) and fit_noise warned. The pooled estimator keeps every lag
+  # inside a contiguous segment, so censoring costs precision but not bias.
+  set.seed(6861)
+  est <- t(replicate(20, {
+    resid <- sapply(1:20, function(i) as.numeric(stats::arima.sim(list(ar = 0.5, ma = 0.4), 300L)))
+    cens <- sort(sample(300L, 75L))
+    expect_no_warning(
+      plan <- fmriAR::fit_noise(resid, method = "arma", p = 1L, q = 1L,
+                                pooling = "global", censor = cens)
+    )
+    c(plan$phi[[1]], plan$theta[[1]])
+  }))
+  expect_lt(abs(mean(est[, 1]) - 0.5), 0.05)
+  expect_lt(abs(mean(est[, 2]) - 0.4), 0.05)
 })
 
 
@@ -759,7 +760,7 @@ test_that("the reported gamma reconstructs a valid noise covariance", {
   expect_equal(nrow(Sigma), length(g))
 })
 
-test_that("ARMA reports gamma at voxel scale and declines to guess sigma2", {
+test_that("ARMA reports gamma and sigma2 at voxel scale", {
   # Regression guard: the ARMA branch returned hr_arma's own sigma2, which is
   # the innovation variance of the run-MEAN series -- smaller than the per-voxel
   # value by roughly the number of voxels averaged (0.048 vs 1.095 on identical
@@ -780,9 +781,9 @@ test_that("ARMA reports gamma at voxel scale and declines to guess sigma2", {
   expect_gt(min(eigen(stats::toeplitz(arma$gamma[[1]]), symmetric = TRUE,
                       only.values = TRUE)$values), 0)
 
-  # sigma2 is unavailable for ARMA and must say so rather than report the
-  # run-mean value.
-  expect_true(is.na(arma$sigma2[[1]]))
+  # sigma2 is the voxel-scale innovation variance (innovations have unit
+  # variance here), not the run-mean value.
+  expect_equal(arma$sigma2[[1]], 1, tolerance = 0.1)
 })
 
 test_that("pooled gamma stays a valid covariance across runs of unequal reach", {
@@ -1063,6 +1064,6 @@ test_that("ARMA gamma is voxel-scale under run pooling and censoring too", {
       expect_gt(min(eigen(stats::toeplitz(g), symmetric = TRUE,
                           only.values = TRUE)$values), 0)
     }
-    expect_true(all(vapply(plan$sigma2, is.na, logical(1))), label = nm)
+    for (s2 in plan$sigma2) expect_equal(s2, 1, tolerance = 0.15, info = nm)
   }
 })

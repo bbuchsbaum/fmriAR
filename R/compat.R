@@ -79,7 +79,7 @@ compat_env <- local({
   whiten_with_phi <- function(X, Y, phi, theta = NULL,
                               runs = NULL, parcels = NULL,
                               pooling = c("global","run","parcel"),
-                              exact_first = FALSE,
+                              exact_first = TRUE,
                               parallel = TRUE) {
     plan <- plan_from_phi(phi = phi,
                           theta = theta,
@@ -100,8 +100,15 @@ compat_env <- local({
     p_use <- if (!is.null(p)) p else prev_plan$order[["p"]]
     q_use <- if (!is.null(q)) q else prev_plan$order[["q"]]
 
+    # Carry over everything the previous plan was fitted with, not just its
+    # orders: dropping censor re-estimated across scrubbed frames, and dropping
+    # exact_first silently changed how segment starts are whitened.
     fit_noise(resid = resid,
               runs = runs,
+              censor = if (!is.null(prev_plan$n_time) &&
+                           identical(as.integer(prev_plan$n_time), nrow(resid)))
+                prev_plan$censor else NULL,
+              exact_first = if (isFALSE(prev_plan$exact_first)) "none" else "ar1",
               parcels = parcels,
               method = method,
               p = if (!is.null(p_use) && p_use > 0L) as.integer(p_use) else "auto",

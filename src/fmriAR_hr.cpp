@@ -187,6 +187,14 @@ Rcpp::List hr_arma_fit_cpp(const arma::vec& y_in,
 
   const int mlag = std::max(p, q);
   if (n - mlag <= p + q) return hr_failure(p, q, p_big, iter);
+  // The long-AR residuals are built with a zero pre-sample, so the first p_big
+  // of them are poor innovation proxies. Start the regression after that
+  // burn-in when the series is long enough to afford it.
+  int start = mlag;
+  if (q > 0) {
+    const int burn = std::max(mlag, p_big + q);
+    if (n - burn >= 10 * (p + q + 1)) start = burn;
+  }
 
   if ((p + q) == 0) {
     const double sigma2 = arma::mean(arma::square(y));
@@ -205,16 +213,16 @@ Rcpp::List hr_arma_fit_cpp(const arma::vec& y_in,
   arma::vec theta(q, arma::fill::zeros);
 
   for (int it = 0; it <= iter; ++it) {
-    const int rows = n - mlag;
+    const int rows = n - start;
     const int cols = p + q;
     arma::mat Z(rows, cols, arma::fill::zeros);
-    arma::vec ysub = y.subvec(mlag, n - 1);
+    arma::vec ysub = y.subvec(start, n - 1);
 
     for (int i = 1; i <= p; ++i) {
-      Z.col(i - 1) = y.subvec(mlag - i, n - 1 - i);
+      Z.col(i - 1) = y.subvec(start - i, n - 1 - i);
     }
     for (int j = 1; j <= q; ++j) {
-      Z.col(p + j - 1) = ehat.subvec(mlag - j, n - 1 - j);
+      Z.col(p + j - 1) = ehat.subvec(start - j, n - 1 - j);
     }
 
     arma::vec coef;
@@ -231,7 +239,7 @@ Rcpp::List hr_arma_fit_cpp(const arma::vec& y_in,
     ehat = arma_innovations_vec(y, phi, theta);
   }
 
-  double sigma2 = arma::mean(arma::square(ehat));
+  double sigma2 = arma::mean(arma::square(ehat.subvec(start, n - 1)));
 
   return Rcpp::List::create(
     Rcpp::Named("phi")    = phi,

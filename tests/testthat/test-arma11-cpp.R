@@ -24,7 +24,7 @@ test_that("hr_arma_fit_cpp recovers ARMA(1,1) structure", {
                              phi = phi_hat,
                              theta = theta_hat,
                              run_starts = 0L,
-                             exact_first_ar1 = FALSE,
+                             exact_first = FALSE,
                              parallel = FALSE)
   innovations <- drop(out$Y)
   ac_vals <- stats::acf(innovations, plot = FALSE, lag.max = 12, demean = TRUE)$acf[-1L]

@@ -26,7 +26,25 @@
 .ms_dispersion <- function(resid, parcels) {
   parcels <- as.integer(parcels)
   vvar <- apply(resid, 2L, stats::var)
-  tapply(vvar, parcels, function(z) stats::mad(z, constant = 1))
+  # Relative dispersion of voxel variances within each parcel. The raw MAD is in
+  # squared data units, so the weights 1 / (1 + disp) -- and with them phi --
+  # changed when the data were merely rescaled. Normalising by the median
+  # variance of all voxels keeps the weights unit-free while leaving them
+  # unchanged for unit-variance data.
+  scale <- stats::median(vvar)
+  if (!is.finite(scale) || scale <= 0) scale <- 1
+  tapply(vvar / scale, parcels, function(z) stats::mad(z, constant = 1))
+}
+
+# Order for the Yule-Walker solve in acvf_pooled mode. An explicit p is fitted
+# at the pooling target. Under p = "auto", fitting every parcel at p_max
+# discards the order selection entirely; use the largest order selected at any
+# contributing scale, which is the effective order pacf_weighted mode produces.
+.ms_yw_order <- function(p, target, phi_lists) {
+  target <- as.integer(target)
+  if (!identical(p, "auto")) return(target)
+  sel <- unlist(lapply(phi_lists, function(l) vapply(l, length, 0L)))
+  min(target, if (length(sel)) max(sel) else 0L)
 }
 
 .ms_weights <- function(n_t, n_runs, sizes, disp, beta = 0.5, eps = 1e-8) {
@@ -50,7 +68,7 @@
                                 acvf_by_coarse = NULL, acvf_by_medium = NULL, acvf_by_fine = NULL,
                                 parents, sizes, disp_list, p_target,
                                 mode = c("pacf_weighted", "acvf_pooled"),
-                                kappa_clip = 0.99) {
+                                kappa_clip = 0.99, yw_order = p_target) {
   mode <- match.arg(mode)
   pids_fine <- sort(as.integer(names(phi_by_fine)))
   out_phi <- setNames(vector("list", length(pids_fine)), as.character(pids_fine))
@@ -97,8 +115,12 @@
       g_f <- .ms_pad(g_f, p_target + 1L)
 
       g <- w["coarse"] * g_c + w["medium"] * g_m + w["fine"] * g_f
-      yw <- yw_from_acvf_fast(g, p_target)
-      out_phi[[key_f]] <- enforce_stationary_ar(yw$phi)
+      if (yw_order == 0L) {
+        out_phi[[key_f]] <- numeric(0)
+      } else {
+        yw <- yw_from_acvf_fast(g[seq_len(yw_order + 1L)], yw_order)
+        out_phi[[key_f]] <- enforce_stationary_ar(yw$phi)
+      }
     }
   }
 

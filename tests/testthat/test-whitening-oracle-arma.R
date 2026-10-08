@@ -71,7 +71,7 @@ test_that("arma_whiten_inplace matches manual ARMA recursion across segments", {
     phi = phi,
     theta = theta,
     run_starts = run_starts,
-    exact_first_ar1 = FALSE,
+    exact_first = FALSE,
     parallel = FALSE
   )
 

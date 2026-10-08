@@ -79,9 +79,38 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// pooled_acvf_seg_cpp
+Rcpp::List pooled_acvf_seg_cpp(const NumericMatrix& mat, const IntegerVector& seg_id, int max_lag);
+RcppExport SEXP _fmriAR_pooled_acvf_seg_cpp(SEXP matSEXP, SEXP seg_idSEXP, SEXP max_lagSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const NumericMatrix& >::type mat(matSEXP);
+    Rcpp::traits::input_parameter< const IntegerVector& >::type seg_id(seg_idSEXP);
+    Rcpp::traits::input_parameter< int >::type max_lag(max_lagSEXP);
+    rcpp_result_gen = Rcpp::wrap(pooled_acvf_seg_cpp(mat, seg_id, max_lag));
+    return rcpp_result_gen;
+END_RCPP
+}
+// hr_normal_eq_cpp
+Rcpp::List hr_normal_eq_cpp(const NumericMatrix& Y, const NumericMatrix& E, const IntegerVector& rel, int p, int q, int start);
+RcppExport SEXP _fmriAR_hr_normal_eq_cpp(SEXP YSEXP, SEXP ESEXP, SEXP relSEXP, SEXP pSEXP, SEXP qSEXP, SEXP startSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const NumericMatrix& >::type Y(YSEXP);
+    Rcpp::traits::input_parameter< const NumericMatrix& >::type E(ESEXP);
+    Rcpp::traits::input_parameter< const IntegerVector& >::type rel(relSEXP);
+    Rcpp::traits::input_parameter< int >::type p(pSEXP);
+    Rcpp::traits::input_parameter< int >::type q(qSEXP);
+    Rcpp::traits::input_parameter< int >::type start(startSEXP);
+    rcpp_result_gen = Rcpp::wrap(hr_normal_eq_cpp(Y, E, rel, p, q, start));
+    return rcpp_result_gen;
+END_RCPP
+}
 // arma_whiten_inplace
-Rcpp::List arma_whiten_inplace(Rcpp::NumericMatrix Y, Rcpp::NumericMatrix X, const arma::vec& phi, const arma::vec& theta, Rcpp::IntegerVector run_starts, bool exact_first_ar1, bool parallel);
-RcppExport SEXP _fmriAR_arma_whiten_inplace(SEXP YSEXP, SEXP XSEXP, SEXP phiSEXP, SEXP thetaSEXP, SEXP run_startsSEXP, SEXP exact_first_ar1SEXP, SEXP parallelSEXP) {
+Rcpp::List arma_whiten_inplace(Rcpp::NumericMatrix Y, Rcpp::NumericMatrix X, const arma::vec& phi, const arma::vec& theta, Rcpp::IntegerVector run_starts, bool exact_first, bool parallel, int n_threads);
+RcppExport SEXP _fmriAR_arma_whiten_inplace(SEXP YSEXP, SEXP XSEXP, SEXP phiSEXP, SEXP thetaSEXP, SEXP run_startsSEXP, SEXP exact_firstSEXP, SEXP parallelSEXP, SEXP n_threadsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -90,15 +119,16 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< const arma::vec& >::type phi(phiSEXP);
     Rcpp::traits::input_parameter< const arma::vec& >::type theta(thetaSEXP);
     Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type run_starts(run_startsSEXP);
-    Rcpp::traits::input_parameter< bool >::type exact_first_ar1(exact_first_ar1SEXP);
+    Rcpp::traits::input_parameter< bool >::type exact_first(exact_firstSEXP);
     Rcpp::traits::input_parameter< bool >::type parallel(parallelSEXP);
-    rcpp_result_gen = Rcpp::wrap(arma_whiten_inplace(Y, X, phi, theta, run_starts, exact_first_ar1, parallel));
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    rcpp_result_gen = Rcpp::wrap(arma_whiten_inplace(Y, X, phi, theta, run_starts, exact_first, parallel, n_threads));
     return rcpp_result_gen;
 END_RCPP
 }
 // arma_whiten_void
-void arma_whiten_void(Rcpp::NumericMatrix Y, Rcpp::NumericMatrix X, const arma::vec& phi, const arma::vec& theta, Rcpp::IntegerVector run_starts, bool exact_first_ar1, bool parallel);
-RcppExport SEXP _fmriAR_arma_whiten_void(SEXP YSEXP, SEXP XSEXP, SEXP phiSEXP, SEXP thetaSEXP, SEXP run_startsSEXP, SEXP exact_first_ar1SEXP, SEXP parallelSEXP) {
+void arma_whiten_void(Rcpp::NumericMatrix Y, Rcpp::NumericMatrix X, const arma::vec& phi, const arma::vec& theta, Rcpp::IntegerVector run_starts, bool exact_first, bool parallel, int n_threads);
+RcppExport SEXP _fmriAR_arma_whiten_void(SEXP YSEXP, SEXP XSEXP, SEXP phiSEXP, SEXP thetaSEXP, SEXP run_startsSEXP, SEXP exact_firstSEXP, SEXP parallelSEXP, SEXP n_threadsSEXP) {
 BEGIN_RCPP
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type Y(YSEXP);
@@ -106,10 +136,24 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< const arma::vec& >::type phi(phiSEXP);
     Rcpp::traits::input_parameter< const arma::vec& >::type theta(thetaSEXP);
     Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type run_starts(run_startsSEXP);
-    Rcpp::traits::input_parameter< bool >::type exact_first_ar1(exact_first_ar1SEXP);
+    Rcpp::traits::input_parameter< bool >::type exact_first(exact_firstSEXP);
     Rcpp::traits::input_parameter< bool >::type parallel(parallelSEXP);
-    arma_whiten_void(Y, X, phi, theta, run_starts, exact_first_ar1, parallel);
+    Rcpp::traits::input_parameter< int >::type n_threads(n_threadsSEXP);
+    arma_whiten_void(Y, X, phi, theta, run_starts, exact_first, parallel, n_threads);
     return R_NilValue;
+END_RCPP
+}
+// arma_acvf_cpp
+Rcpp::NumericVector arma_acvf_cpp(const arma::vec& phi, const arma::vec& theta, int max_lag);
+RcppExport SEXP _fmriAR_arma_acvf_cpp(SEXP phiSEXP, SEXP thetaSEXP, SEXP max_lagSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const arma::vec& >::type phi(phiSEXP);
+    Rcpp::traits::input_parameter< const arma::vec& >::type theta(thetaSEXP);
+    Rcpp::traits::input_parameter< int >::type max_lag(max_lagSEXP);
+    rcpp_result_gen = Rcpp::wrap(arma_acvf_cpp(phi, theta, max_lag));
+    return rcpp_result_gen;
 END_RCPP
 }
 
@@ -119,8 +163,11 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fmriAR_run_avg_acvf_cpp", (DL_FUNC) &_fmriAR_run_avg_acvf_cpp, 2},
     {"_fmriAR_segmented_acvf_cpp", (DL_FUNC) &_fmriAR_segmented_acvf_cpp, 5},
     {"_fmriAR_yw_from_acvf_cpp", (DL_FUNC) &_fmriAR_yw_from_acvf_cpp, 2},
-    {"_fmriAR_arma_whiten_inplace", (DL_FUNC) &_fmriAR_arma_whiten_inplace, 7},
-    {"_fmriAR_arma_whiten_void", (DL_FUNC) &_fmriAR_arma_whiten_void, 7},
+    {"_fmriAR_pooled_acvf_seg_cpp", (DL_FUNC) &_fmriAR_pooled_acvf_seg_cpp, 3},
+    {"_fmriAR_hr_normal_eq_cpp", (DL_FUNC) &_fmriAR_hr_normal_eq_cpp, 6},
+    {"_fmriAR_arma_whiten_inplace", (DL_FUNC) &_fmriAR_arma_whiten_inplace, 8},
+    {"_fmriAR_arma_whiten_void", (DL_FUNC) &_fmriAR_arma_whiten_void, 8},
+    {"_fmriAR_arma_acvf_cpp", (DL_FUNC) &_fmriAR_arma_acvf_cpp, 3},
     {NULL, NULL, 0}
 };
 

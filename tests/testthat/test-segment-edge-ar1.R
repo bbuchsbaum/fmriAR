@@ -1,5 +1,5 @@
 
-test_that("Segment starts with exact_first_ar1 yield correctly scaled first innovations", {
+test_that("Segment starts with exact_first yield correctly scaled first innovations", {
   skip_if_not_installed("fmriAR")
   S <- 100L
   L <- 50L
@@ -11,12 +11,12 @@ test_that("Segment starts with exact_first_ar1 yield correctly scaled first inno
   rs0 <- sim$run_starts0
 
   yw <- do_whiten_Y(y, phi = phi, theta = numeric(), run_starts0 = rs0,
-                    exact_first_ar1 = TRUE, parallel = FALSE)
+                    exact_first = TRUE, parallel = FALSE)
 
   first_idx <- as.integer(rs0 + 1L)
   first_innov <- yw[first_idx]
 
-  # Theoretical variance at segment starts with exact_first_ar1 is sigma^2
+  # Theoretical variance at segment starts with exact_first is sigma^2
   v_emp <- var(first_innov)
   expect_equal(v_emp, sigma^2, tolerance = 0.2)
 

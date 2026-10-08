@@ -28,16 +28,26 @@ contiguous block and may not be missing.}
 
 \item{run_starts}{Optional 0-based run start indices (alternative to \code{runs}).}
 
-\item{censor}{Optional indices of censored TRs (1-based); filter resets after gaps.}
+\item{censor}{Optional censored timepoints: 1-based indices or a logical mask
+of length \code{nrow(Y)}. The filter restarts (with exact stationary
+initialisation when the plan uses \code{exact_first}) at the first frame after
+each censored one. When omitted and the plan was fitted on data with the
+same number of timepoints, the plan's own \code{censor} set is used.}
 
 \item{parcels}{Optional parcel labels (length = ncol(Y)) when using parcel plans.}
 
-\item{inplace}{Modify inputs in place (logical).}
+\item{inplace}{Retained for backward compatibility. R's copy semantics mean
+the inputs are never modified; \code{TRUE} only makes the result invisible.}
 
-\item{parallel}{Use OpenMP parallelism if available.}
+\item{parallel}{Use OpenMP parallelism if available. The thread count can be
+capped with \code{options(fmriAR.max_threads = k)}.}
 }
 \value{
-List with whitened data. Parcel plans return \code{X_by} per parcel; others return a single \code{X} matrix.
+List with whitened data. Parcel plans return \code{X_by} per parcel; others
+return a single \code{X} matrix. When censoring is in effect the list also
+carries \code{censor}, the censored row indices. Those rows are still present in
+\code{X}/\code{Y} (filtered from the preceding history) and should be dropped before
+fitting, e.g. \code{lm.fit(out$X[-out$censor, ], out$Y[-out$censor, ])}.
 }
 \description{
 Apply a whitening plan to design and data matrices
