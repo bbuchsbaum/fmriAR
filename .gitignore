@@ -10,3 +10,6 @@ docs
 /Meta/
 .vscode/
 Rplots.pdf
+*.gcda
+*.gcno
+*.gcov

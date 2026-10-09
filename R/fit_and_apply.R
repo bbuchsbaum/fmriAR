@@ -442,6 +442,38 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
   list(idx = idx, starts0 = as.integer(which(brk) - 1L), run_id = r[idx])
 }
 
+# BIC sample size for a pooled fit: frames times the effective number of
+# independent voxels (Kish design effect, see .effective_voxels()). Counting
+# frames alone treats 60 pooled voxels as one series' worth of evidence and
+# under-selects: a voxel-pooled AR(2) with phi = (0.5, -0.2) came back AR(1).
+# `groups` (optional) labels the rows to centre separately (runs).
+.bic_n <- function(mat, n_frames, groups = NULL, vbar = NULL) {
+  if (!is.matrix(mat)) mat <- as.matrix(mat)
+  V <- ncol(mat)
+  if (V <= 1L || nrow(mat) < 2L) return(n_frames)
+  grp <- if (is.null(groups)) rep(1L, nrow(mat)) else groups
+  # Design effect from the variance of the voxel mean (see .effective_voxels),
+  # without forming a centred copy of the data. `vbar`, the mean over voxels
+  # of each voxel's centred sum of squares, is what the pooled autocovariance
+  # already holds at lag 0.
+  rm <- rowMeans(mat)
+  vmean <- 0
+  for (rows in split(seq_len(nrow(mat)), grp)) {
+    r <- rm[rows]
+    vmean <- vmean + sum((r - mean(r))^2)
+  }
+  if (is.null(vbar)) {
+    vbar <- 0
+    for (rows in split(seq_len(nrow(mat)), grp)) {
+      m <- mat[rows, , drop = FALSE]
+      vbar <- vbar + sum(colSums(m * m) - nrow(m) * colMeans(m)^2) / V
+    }
+  }
+  if (!(vbar > 0)) return(n_frames)
+  rbar <- min(max((V * vmean / vbar - 1) / (V - 1), 0), 1)
+  n_frames * max(1, min(V, V / (1 + (V - 1) * rbar)))
+}
+
 # Order selection and fitting for one pooling unit, aware of the segment
 # structure it was drawn from. `y` is a single series or a matrix of voxels
 # (columns); with a matrix the per-voxel autocovariances are pooled, exactly as
@@ -501,18 +533,19 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
   # filter inflates variance instead of whitening. An explicitly requested order
   # is honoured as given; this bounds only the search.
   p_sel <- min(p_cap, floor(n / 5))
-  n_log <- log(n)
-  # BIC = n log(sigma2) + k log(n); -2 log L of a Gaussian AR is n log(sigma2)
+  # BIC = N log(sigma2) + k log(N); -2 log L of a Gaussian AR is N log(sigma2)
   # up to a constant. A factor of 2 on the fit term halves the penalty and
-  # over-selects the order.
-  best <- list(bic = n * log(pmax(gamma0[1], 1e-12)) + n_log,
+  # over-selects the order. N counts frames times effective voxels.
+  nb <- .bic_n(Y, n, groups = center_id, vbar = pooled$num[1L])
+  n_log <- log(nb)
+  best <- list(bic = nb * log(pmax(gamma0[1], 1e-12)) + n_log,
                phi = numeric(0), p = 0L, sigma2 = gamma0[1])
   for (pp in seq_len(max(0L, p_sel))) {
     f <- fit_order(pp)
     # enforce_stationary_ar() returns length 0 when it cannot produce a
     # stationary filter, which must not be recorded as an order-pp fit.
     if (!is.finite(f$sigma2) || length(f$phi) != pp || !all(is.finite(f$phi))) next
-    bic <- n * log(f$sigma2) + (pp + 1L) * n_log
+    bic <- nb * log(f$sigma2) + (pp + 1L) * n_log
     if (is.finite(bic) && bic < best$bic) {
       best <- list(bic = bic, phi = f$phi, p = pp, sigma2 = f$sigma2)
     }
@@ -584,14 +617,17 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
   }
   n_eff <- sum(vapply(estimates[ok], function(e) e$n_eff %||% 0L, 0))
   if (n_eff <= 0) n_eff <- sum(lens[ok])
-  # Same data-bounded search as the per-run path, on the pooled frame count.
+  # Same data-bounded search as the per-run path, on the pooled frame count;
+  # the BIC sample size adds each run's effective voxel count.
   p_sel <- min(p_cap, floor(n_eff / 5))
+  nb <- sum(vapply(estimates[ok], function(e) e$n_bic %||% e$n_eff %||% 0, 0))
+  if (nb <= 0) nb <- n_eff
   best_phi <- numeric(0)
-  best_bic <- n_eff * log(g[1]) + log(n_eff)
+  best_bic <- nb * log(g[1]) + log(nb)
   for (pp in seq_len(max(0L, p_sel))) {
     f <- fit_order(pp)
     if (length(f$phi) != pp || !all(is.finite(f$phi))) next
-    bic <- n_eff * log(f$sigma2) + (pp + 1L) * log(n_eff)
+    bic <- nb * log(f$sigma2) + (pp + 1L) * log(nb)
     if (is.finite(bic) && bic < best_bic) {
       best_bic <- bic
       best_phi <- f$phi
@@ -623,7 +659,11 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 #'   is honoured even when it exceeds `p_max`.
 #' @param q MA order (integer), or `"auto"` (ARMA only) to choose it by BIC
 #'   from `0:q_max`.
-#' @param p_max Maximum AR order when `p = "auto"`. For `method = "arma"`,
+#' @param p_max Maximum AR order when `p = "auto"`. The order is chosen by
+#'   BIC whose sample size is the number of frames times the effective number
+#'   of independent voxels (a design effect from the mean inter-voxel
+#'   correlation), so pooling many independent voxels can support a higher
+#'   order than one series would. For `method = "arma"`,
 #'   `p = "auto"` searches `0:p_max` jointly with the MA order by BIC on the
 #'   pooled Hannan--Rissanen regression.
 #' @param q_max Maximum MA order when `q = "auto"`.
@@ -893,6 +933,11 @@ fit_noise <- function(resid = NULL,
                                      tol = -Inf)
       null_fit$gamma_raw <- gamma_raw
       null_fit$n_eff <- n_eff
+      n_bic <- if (identical(p, "auto")) {
+        .bic_n(if (n_eff == n_run) mat else mat[valid_idx, , drop = FALSE], n_eff,
+               vbar = pooled$num[1L])
+      } else n_eff
+      null_fit$n_bic <- n_bic
 
       if (!identical(p, "auto")) {
         pp <- min(as.integer(p), p_cap)
@@ -907,9 +952,9 @@ fit_noise <- function(resid = NULL,
 
       best_phi <- numeric(0)
       best_order <- c(p = 0L, q = 0L)
-      n_eff_log <- log(n_eff)
+      n_eff_log <- log(n_bic)
       sigma0 <- pmax(gamma0[1], 1e-12)
-      best_bic <- n_eff * log(sigma0) + n_eff_log
+      best_bic <- n_bic * log(sigma0) + n_eff_log
       best_sigma2 <- sigma0
       # Bound the order BIC may select by available data; an explicit p is honoured.
       p_sel <- min(p_cap, floor(n_eff / 5))
@@ -919,7 +964,7 @@ fit_noise <- function(resid = NULL,
           yw <- yw_from_acvf_fast(gamma_pp[seq_len(pp + 1L)], pp)
           sigma2 <- pmax(yw$sigma2, 1e-12)
           if (!is.finite(sigma2)) next
-          bic <- n_eff * log(sigma2) + (pp + 1L) * n_eff_log
+          bic <- n_bic * log(sigma2) + (pp + 1L) * n_eff_log
           if (!is.finite(bic) || bic >= best_bic) next
           phi_pp <- enforce_stationary_ar(yw$phi, 0.99)
           if (length(phi_pp) != pp || !all(is.finite(phi_pp))) next
@@ -931,7 +976,7 @@ fit_noise <- function(resid = NULL,
       }
       list(phi = best_phi, theta = numeric(0), order = best_order,
            gamma = gamma_full, sigma2 = best_sigma2,
-           gamma_raw = gamma_raw, n_eff = n_eff)
+           gamma_raw = gamma_raw, n_eff = n_eff, n_bic = n_bic)
     } else {
       # ARMA: pooled, segment-aware Hannan-Rissanen over this run's valid
       # frames (see .hr_arma_pooled). Lag products never span a censoring gap.
