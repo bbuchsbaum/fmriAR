@@ -83,9 +83,6 @@ noise_acvf <- function(resid, runs = NULL, censor = NULL, max_lag = 20L,
     if (is.null(parcels)) stop("'parcels' is required when pooling = 'parcel'")
     parcels <- .parcel_codes(parcels)
     stopifnot(length(parcels) == ncol(resid))
-    if (!is.null(design)) {
-      stop("residual-bias correction is not yet supported for pooling = 'parcel'")
-    }
   }
 
   one_unit <- function(idx, cols, corr) {
@@ -115,16 +112,21 @@ noise_acvf <- function(resid, runs = NULL, censor = NULL, max_lag = 20L,
     seg <- .valid_segments(n, runs = runs, censor = censor)
     if (length(seg$idx) < 2L) stop("no valid segments remain after censoring")
     seg_id <- cumsum(seq_along(seg$idx) %in% (seg$starts0 + 1L))
+    corr_pool <- .pool_corrections(corr_by_run, seg)
+    lag_acc <- if (is.null(corr_pool)) max_lag else
+      min(max(max_lag, nrow(corr_pool) - 1L), length(seg$idx) - 1L)
     units <- setNames(lapply(ids, function(pid) {
       cols <- which(parcels == pid)
       if (!length(cols)) return(NULL)
       pooled <- .pooled_acvf_segments(resid[seg$idx, cols, drop = FALSE], seg_id,
-                                      max_lag, center_id = seg$run_id)
-      g <- .acvf_from_pooled(pooled, order = max_lag)
+                                      lag_acc, center_id = seg$run_id)
+      result <- .acvf_from_pooled(pooled, order = max_lag, correction = corr_pool,
+                                  return_status = TRUE)
+      g <- result$acvf
       if (!length(g)) return(NULL)
       list(acvf = g, pairs = pooled$pairs[seq_along(g)],
            n_seg = max(seg_id), seg_len = as.integer(table(seg_id)),
-           corrected = FALSE)
+           corrected = result$corrected)
     }), as.character(ids))
   } else {
     units <- setNames(lapply(seq_along(Rsets), function(i) {

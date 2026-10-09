@@ -473,3 +473,160 @@ test_that("whiten_apply(inplace =) is deprecated and never touches the inputs", 
   expect_equal(out, whiten_apply(plan, X, Y))
   expect_silent(whiten_apply(plan, X, Y))
 })
+
+# --- follow-up fixes (0.4.1) --------------------------------------------------------------
+
+test_that("C++ root reflection handles a zero leading coefficient", {
+  # arma::roots() drops leading zeros, so with phi_p == 0 the rebuilt polynomial
+  # was indexed by p and the constant term landed on phi_1: (1.5, 0) became
+  # (-1, 0.667), which is not stationary.
+  out <- drop(enforce_ar_stationarity_cpp(c(1.5, 0)))
+  expect_equal(out, c(1 / (1.5 * 1.0001), 0), tolerance = 1e-6)
+  expect_gt(min(Mod(polyroot(c(1, -out[out != 0])))), 1)
+  th <- drop(enforce_ma_invertibility_cpp(c(2, 0)))
+  expect_equal(th[2], 0)
+  expect_gt(min(Mod(polyroot(c(1, th[1])))), 1)
+  # Full-degree inputs are unaffected.
+  expect_equal(drop(enforce_ar_stationarity_cpp(c(0.5, 0.2))), c(0.5, 0.2))
+})
+
+test_that("parcel pooling estimates from voxels, not the parcel mean", {
+  set.seed(9201)
+  n <- 300; pf <- rep(1:4, each = 20)
+  R <- vapply(seq_along(pf), function(j) as.numeric(stats::arima.sim(list(ar = 0.3), n)), numeric(n))
+  for (k in 1:4) {
+    R[, pf == k] <- R[, pf == k] + 0.5 * as.numeric(stats::filter(rnorm(n), 0.9, method = "recursive"))
+  }
+  plan <- fit_noise(R, pooling = "parcel", parcels = pf, p = 1)
+  vox <- vapply(1:4, function(k) mean(apply(R[, pf == k], 2, function(y)
+    stats::acf(y, 1, plot = FALSE)$acf[2])), 0)
+  mean_series <- vapply(1:4, function(k)
+    stats::acf(rowMeans(R[, pf == k]), 1, plot = FALSE)$acf[2], 0)
+  est <- unlist(plan$phi_by_parcel)
+  expect_lt(max(abs(est - vox)), 0.03)
+  expect_true(all(mean_series - vox > 0.2))   # the old target was far off
+})
+
+test_that("a single parcel holding every voxel reproduces global pooling", {
+  set.seed(9202)
+  R <- sim_arma_mat(250, 12, c(0.5, 0.2))
+  cens <- c(30L, 31L, 140L)
+  for (pp in list(2L, "auto")) {
+    g <- fit_noise(R, p = pp, censor = cens)
+    pc <- fit_noise(R, p = pp, censor = cens, pooling = "parcel", parcels = rep(1L, 12))
+    expect_equal(unname(pc$phi_by_parcel[[1]]), g$phi[[1]], tolerance = 1e-10)
+  }
+})
+
+# Dense reference for the residual-bias matrix (the pre-0.4.1 implementation).
+acvf_bias_core_dense <- function(Q, run_vec, idx, seg_id, max_lag) {
+  nv <- length(idx)
+  R <- -tcrossprod(Q[idx, , drop = FALSE], Q)
+  R[cbind(seq_len(nv), idx)] <- R[cbind(seq_len(nv), idx)] + 1
+  R <- R - rep(colMeans(R), each = nv)
+  A <- diag(max_lag + 1L)
+  for (k in 0:max_lag) {
+    SkR <- .apply_lag_operator(R, k, run_vec)
+    for (h in 0:max_lag) {
+      if (h == 0) { a <- b <- seq_len(nv) } else {
+        if (nv <= h) next
+        hi <- seq.int(h + 1L, nv); lo <- seq.int(1L, nv - h)
+        ok <- seg_id[hi] == seg_id[lo]; a <- hi[ok]; b <- lo[ok]
+      }
+      if (!length(a)) next
+      A[h + 1L, k + 1L] <- sum(R[a, , drop = FALSE] * SkR[b, , drop = FALSE]) / length(a)
+    }
+  }
+  A
+}
+
+test_that("low-rank bias matrix equals the dense construction", {
+  set.seed(9203)
+  n <- 160; runs <- rep(1:2, each = 80)
+  X <- cbind(model.matrix(~ factor(runs) - 1), poly(seq_len(n), 3), rnorm(n))
+  Q <- qr.Q(qr(X)); rv <- .run_codes(runs, n)
+  for (cen in list(integer(0), c(5L, 6L, 40L, 81L, 120L))) {
+    for (ri in 1:2) {
+      keep <- setdiff(which(runs == ri), cen)
+      seg <- cumsum(c(1L, as.integer(diff(keep) > 1L)))
+      expect_equal(.acvf_bias_core(Q, rv, keep, seg, 10L),
+                   acvf_bias_core_dense(Q, rv, keep, seg, 10L), tolerance = 1e-12)
+    }
+  }
+})
+
+drift_design <- function(n, runs) {
+  dct <- function(L, k) sapply(1:k, function(j) cos(pi * j * (seq_len(L) - 0.5) / L))
+  L <- n / 2
+  cbind(model.matrix(~ factor(runs) - 1),
+        rbind(cbind(dct(L, 6), matrix(0, L, 6)), cbind(matrix(0, L, 6), dct(L, 6))),
+        rep(rep(c(0, 1), each = 10), length.out = n))
+}
+
+test_that("residual-bias correction stays accurate under censoring", {
+  # With drift regressors the bias map has a near-null direction (a constant
+  # offset across lags). Censoring let noise into it and the exact solve
+  # returned phi with sd ~4 for a truth of 0.4.
+  set.seed(9204)
+  n <- 300; runs <- rep(1:2, each = 150); X <- drift_design(n, runs)
+  est <- t(replicate(12, {
+    E <- sim_arma_mat(n, 30, 0.4)
+    R <- E - X %*% qr.solve(X, E)
+    cen <- sort(sample(n, 30))
+    c(fit_noise(R, runs = runs, p = 1, censor = cen)$phi[[1]],
+      fit_noise(R, runs = runs, p = 1, censor = cen, design = X)$phi[[1]])
+  }))
+  expect_lt(abs(mean(est[, 2]) - 0.4), 0.04)
+  expect_lt(sd(est[, 2]), 0.08)
+  expect_lt(abs(mean(est[, 2]) - 0.4), abs(mean(est[, 1]) - 0.4))
+})
+
+test_that(".solve_correction is exact for well-conditioned maps", {
+  set.seed(9205)
+  A <- diag(10) + matrix(rnorm(100, sd = 0.05), 10)
+  g <- rnorm(10)
+  expect_equal(.solve_correction(A, g), as.numeric(solve(A, g)))
+})
+
+test_that("parcel pooling supports residual-bias correction", {
+  set.seed(9206)
+  n <- 300; runs <- rep(1:2, each = 150); X <- drift_design(n, runs)
+  pf <- rep(1:3, each = 10)
+  est <- t(replicate(10, {
+    E <- sim_arma_mat(n, 30, 0.4)
+    R <- E - X %*% qr.solve(X, E)
+    raw <- fit_noise(R, runs = runs, pooling = "parcel", parcels = pf, p = 1)
+    cor <- fit_noise(R, runs = runs, pooling = "parcel", parcels = pf, p = 1, design = X)
+    na <- noise_acvf(R, runs = runs, pooling = "parcel", parcels = pf, design = X, max_lag = 1)
+    c(mean(unlist(raw$phi_by_parcel)), mean(unlist(cor$phi_by_parcel)),
+      mean(vapply(na$acvf, function(a) a[2] / a[1], 0)), na$corrected)
+  }))
+  expect_lt(abs(mean(est[, 2]) - 0.4), 0.03)
+  expect_gt(abs(mean(est[, 1]) - 0.4), 0.05)
+  expect_lt(abs(mean(est[, 3]) - 0.4), 0.03)
+  expect_true(all(est[, 4] == 1))
+})
+
+test_that("AFNI plans: negative poles rejected, vrt gives AFNI's correlations", {
+  R <- matrix(rnorm(200 * 4), 200)
+  expect_error(afni_restricted_plan(R, roots = list(a = -0.2, r1 = 0.3, t1 = 1)), ">= 0")
+  for (sp in list(list(a = 0.5, r1 = 0.6, t1 = 1, vrt = 0.7),
+                  list(a = 0.8, r1 = 0.3, t1 = 2.5, vrt = 0.3))) {
+    pl <- afni_restricted_plan(R, p = 3L, roots = sp, estimate_ma1 = FALSE)
+    phi <- pl$phi[[1]]; th <- pl$theta[[1]]
+    expect_length(th, 3L)
+    expect_equal(stats::ARMAacf(phi, th, 12)[-1],
+                 sp$vrt * stats::ARMAacf(phi, numeric(0), 12)[-1], tolerance = 1e-10)
+    expect_gt(min(Mod(polyroot(c(1, th)))), 1)
+  }
+  sp5 <- list(a = 0.4, r1 = 0.7, t1 = 0.8, r2 = 0.5, t2 = 2, vrt = 0.5)
+  pl5 <- afni_restricted_plan(R, p = 5L, roots = sp5, estimate_ma1 = FALSE)
+  expect_equal(stats::ARMAacf(pl5$phi[[1]], pl5$theta[[1]], 15)[-1],
+               0.5 * stats::ARMAacf(pl5$phi[[1]], numeric(0), 15)[-1], tolerance = 1e-10)
+  # vrt = 1 keeps the pure AR plan; vrt is ignored (with a warning) when the MA
+  # term is estimated.
+  expect_length(afni_restricted_plan(R, roots = list(a = 0.5, r1 = 0.6, t1 = 1),
+                                     estimate_ma1 = FALSE)$theta[[1]], 0L)
+  expect_warning(afni_restricted_plan(R, roots = list(a = 0.5, r1 = 0.6, t1 = 1, vrt = 0.5)),
+                 "ignored")
+})

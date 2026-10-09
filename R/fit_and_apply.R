@@ -292,13 +292,48 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
   if (!is.finite(rc) || rc < .ACVF_RCOND_MIN) {
     return(list(gamma = gamma, applied = FALSE))
   }
-  out <- tryCatch(as.numeric(solve(Asub, gamma[seq_len(L)])),
+  out <- tryCatch(.solve_correction(Asub, gamma[seq_len(L)]),
                   error = function(e) NULL)
   if (is.null(out) || !all(is.finite(out)) || out[1] <= 0) {
     return(list(gamma = gamma, applied = FALSE))
   }
   if (length(gamma) > L) out <- c(out, gamma[(L + 1L):length(gamma)])
   list(gamma = out, applied = TRUE)
+}
+
+# Solve A gamma = gamma_raw, pinning the directions the residuals cannot see.
+#
+# Projecting out run means and slow drift leaves A with one or more
+# near-null directions -- essentially a constant offset across all lags, which
+# a high-passed residual barely registers. Without censoring the raw estimate
+# carries almost no noise along them (a centred series obeys an exact sum
+# constraint over its lag products), so an exact solve is stable. Censoring
+# breaks that constraint: noise along the near-null direction grew 15-fold at
+# 10% censoring and the exact solve returned phi with sd 4 for a truth of 0.4.
+#
+# Directions with singular value below `sv_tol` of the median are therefore
+# not taken from the data. Their coefficients are chosen so the tail of the
+# corrected autocovariance (the last `tail_frac` of the budget) is as close to
+# zero as possible -- the same short-memory assumption the truncated
+# correction already makes. Every well-determined direction is solved exactly,
+# so well-conditioned designs get the exact solution unchanged.
+.solve_correction <- function(A, g, sv_tol = 0.1, tail_frac = 0.25) {
+  L <- ncol(A)
+  if (L < 8L) return(as.numeric(solve(A, g)))
+  s <- svd(A)
+  # Relative to the median singular value, not the largest: the target is an
+  # isolated near-null direction (0.009 against a bulk near 1 for drift
+  # designs). When the residual degrees of freedom barely exceed the lag budget
+  # the whole spectrum is small relative to the first value, and measuring
+  # against it discarded nearly every direction (phi -0.04 for a truth of 0.5).
+  keep <- s$d > sv_tol * stats::median(s$d)
+  if (all(keep)) return(as.numeric(solve(A, g)))
+  x0 <- s$v[, keep, drop = FALSE] %*%
+    (crossprod(s$u[, keep, drop = FALSE], g) / s$d[keep])
+  N <- s$v[, !keep, drop = FALSE]
+  tl <- seq.int(L - ceiling(tail_frac * L) + 1L, L)
+  cc <- qr.solve(N[tl, , drop = FALSE], -x0[tl])
+  as.numeric(x0 + N %*% cc)
 }
 
 .apply_acvf_correction <- function(gamma, A) {
@@ -407,13 +442,16 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
   list(idx = idx, starts0 = as.integer(which(brk) - 1L), run_id = r[idx])
 }
 
-# Order selection and fitting for a single series, aware of the segment
-# structure it was drawn from. The autocovariance comes from segmented_acvf_cpp
-# (per-segment centering, PSD-safe normalization) and BIC scores the
-# Levinson-Durbin prediction error, matching the global/run path exactly.
-.estimate_ar_series <- function(y, p_max, p = "auto", starts0 = 0L, center_id = NULL) {
-  y <- as.numeric(y)
-  n <- length(y)
+# Order selection and fitting for one pooling unit, aware of the segment
+# structure it was drawn from. `y` is a single series or a matrix of voxels
+# (columns); with a matrix the per-voxel autocovariances are pooled, exactly as
+# the global/run path pools them. BIC scores the Levinson-Durbin prediction
+# error on the frame count.
+.estimate_ar_series <- function(y, p_max, p = "auto", starts0 = 0L, center_id = NULL,
+                                correction = NULL) {
+  Y <- if (is.matrix(y)) y else matrix(as.numeric(y), ncol = 1L)
+  storage.mode(Y) <- "double"
+  n <- nrow(Y)
   starts0 <- as.integer(starts0)
   if (!length(starts0)) starts0 <- 0L
 
@@ -424,9 +462,11 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
   if (p_cap < 1L) return(empty)
 
   seg_id <- cumsum(seq_len(n) %in% (starts0 + 1L))
-  pooled <- .pooled_acvf_segments(matrix(y, ncol = 1L), seg_id, p_cap,
-                                  center_id = center_id)
-  gamma0 <- .acvf_from_pooled(pooled, order = 0L)
+  # The bias correction needs a wider lag budget than the AR order does.
+  lag_budget <- if (is.null(correction)) p_cap else
+    min(max(p_cap, nrow(correction) - 1L), n - 1L)
+  pooled <- .pooled_acvf_segments(Y, seg_id, lag_budget, center_id = center_id)
+  gamma0 <- .acvf_from_pooled(pooled, order = 0L, correction = correction)
   if (!length(gamma0) || !is.finite(gamma0[1]) || gamma0[1] <= 0) return(empty)
   p_cap <- min(p_cap, .acvf_max_lag(pooled))
   if (p_cap < 1L) {
@@ -434,11 +474,11 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
     empty$sigma2 <- gamma0[1]
     return(empty)
   }
-  gamma_full <- .acvf_from_pooled(pooled, order = p_cap)
+  gamma_full <- .acvf_from_pooled(pooled, order = p_cap, correction = correction)
 
   # PSD-correct at the order being fitted, not at p_max.
   fit_order <- function(pp) {
-    g <- .acvf_from_pooled(pooled, order = pp)
+    g <- .acvf_from_pooled(pooled, order = pp, correction = correction)
     yw <- yw_from_acvf_fast(g[seq_len(pp + 1L)], pp)
     list(phi = enforce_stationary_ar(yw$phi, 0.99),
          sigma2 = pmax(yw$sigma2, 1e-12))
@@ -610,8 +650,9 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 #'   orthogonality check rejects detectable mismatches, including typical raw,
 #'   GLS, robust, or unrelated residuals. Orthogonality cannot prove the exact
 #'   residual-forming provenance, so the caller remains responsible for
-#'   supplying the matching design. Currently supported for `pooling =
-#'   "global"` and `"run"` with `method = "ar"`.
+#'   supplying the matching design. Supported for every pooling mode with
+#'   `method = "ar"`; under `pooling = "parcel"` the per-run bias maps are
+#'   combined in proportion to the lag pairs each run contributes.
 #' @param acvf_correction Precomputed bias matrices from [acvf_bias_matrix()],
 #'   as an alternative to `design` when many datasets share one design. A single
 #'   matrix is applied to every run; a list is matched against the runs in
@@ -790,10 +831,6 @@ fit_noise <- function(resid = NULL,
   }
   corr_by_run <- NULL
   if (!is.null(design) || !is.null(acvf_correction)) {
-    if (identical(pooling, "parcel")) {
-      stop("residual-bias correction is not yet supported for pooling = 'parcel'; ",
-           "use pooling = 'global' or 'run', or omit 'design'/'acvf_correction'")
-    }
     if (!identical(method, "ar")) {
       stop("residual-bias correction applies to method = 'ar' only")
     }
@@ -936,11 +973,18 @@ fit_noise <- function(resid = NULL,
     if (length(seg$idx) < 2L) stop("no valid timepoints remain after censoring")
     run_starts0 <- seg$starts0
 
+    # Residual-bias correction for an estimator that pools across runs.
+    corr_pool <- .pool_corrections(corr_by_run, seg)
     estimator <- function(y, starts0 = run_starts0) {
       .estimate_ar_series(y, p_max, p = p, starts0 = starts0,
-                          center_id = seg$run_id)
+                          center_id = seg$run_id, correction = corr_pool)
     }
-    M_fine <- .parcel_means(resid, parcels)[seg$idx, , drop = FALSE]
+    # Estimate each parcel from its voxels' pooled autocovariance, not from the
+    # parcel-mean series. The mean's autocovariance is dominated by whatever
+    # the voxels share (its variance shrinks ~1/V for independent noise but not
+    # for shared signal), so a parcel's phi tracked the shared component rather
+    # than the voxel noise the plan is applied to.
+    resid_valid <- resid[seg$idx, , drop = FALSE]
 
     target <- if (is.null(p_target)) {
       if (identical(p, "auto")) {
@@ -955,7 +999,9 @@ fit_noise <- function(resid = NULL,
     }
 
     if (is.null(parcel_sets)) {
-      est_f <- .ms_estimate_scale(M_fine, estimator, run_starts0, lag_max = target, center_id = seg$run_id)
+      est_f <- .ms_estimate_scale(resid_valid, parcels, estimator, run_starts0,
+                                  lag_max = target, center_id = seg$run_id,
+                                  correction = corr_pool)
       if (is.null(multiscale_mode) || target == 0L) {
         phi_parcel <- est_f$phi
       } else if (identical(multiscale_mode, "pacf_weighted")) {
@@ -992,13 +1038,17 @@ fit_noise <- function(resid = NULL,
       stopifnot(length(parcels_medium) == ncol(resid))
       stopifnot(all(parcels_fine == parcels))
 
-      # Subset to the surviving frames exactly as M_fine is, or the centering
-      # grouping and the data disagree in length.
-      M_coarse <- .parcel_means(resid, parcels_coarse)[seg$idx, , drop = FALSE]
-      M_medium <- .parcel_means(resid, parcels_medium)[seg$idx, , drop = FALSE]
-      est_c <- .ms_estimate_scale(M_coarse, estimator, run_starts0, lag_max = target, center_id = seg$run_id)
-      est_m <- .ms_estimate_scale(M_medium, estimator, run_starts0, lag_max = target, center_id = seg$run_id)
-      est_f <- .ms_estimate_scale(M_fine, estimator, run_starts0, lag_max = target, center_id = seg$run_id)
+      # Every scale uses the same surviving frames (resid_valid), so the
+      # centering grouping and the data agree in length.
+      est_c <- .ms_estimate_scale(resid_valid, parcels_coarse, estimator, run_starts0,
+                                  lag_max = target, center_id = seg$run_id,
+                                  correction = corr_pool)
+      est_m <- .ms_estimate_scale(resid_valid, parcels_medium, estimator, run_starts0,
+                                  lag_max = target, center_id = seg$run_id,
+                                  correction = corr_pool)
+      est_f <- .ms_estimate_scale(resid_valid, parcels_fine, estimator, run_starts0,
+                                  lag_max = target, center_id = seg$run_id,
+                                  correction = corr_pool)
 
       parents <- .ms_parent_maps(parcels_fine, parcels_medium, parcels_coarse)
       sizes <- list(
@@ -1060,15 +1110,12 @@ fit_noise <- function(resid = NULL,
 
     # Per-parcel noise scale and shape, keyed like phi_by_parcel.
     #
-    # gamma is computed from the VOXELS in each parcel, not from the parcel-mean
-    # series that phi was estimated on. The parcel mean is the right basis for
-    # phi -- correlation structure is scale-invariant -- but its variance is
-    # smaller than a voxel's by the number of voxels averaged, so reporting it
-    # as the noise scale understated the noise by exactly that factor (16-fold
-    # at 16 voxels per parcel) and made the plan's units depend on the pooling
-    # mode. sigma2 is then derived from the phi actually stored, since under
-    # multiscale pooling the fine-scale innovation variance no longer matches
-    # the pooled coefficients.
+    # gamma is computed from the VOXELS in each parcel, like phi. A parcel-mean
+    # variance is smaller than a voxel's by up to the number of voxels
+    # averaged, which understated the noise by that factor and made the plan's
+    # units depend on the pooling mode. sigma2 is then derived from the phi
+    # actually stored, since under multiscale pooling the fine-scale innovation
+    # variance no longer matches the pooled coefficients.
     n_valid <- length(seg$idx)
     seg_id_p <- cumsum(seq_len(n_valid) %in% (seg$starts0 + 1L))
     resid_valid <- resid[seg$idx, , drop = FALSE]
@@ -1076,10 +1123,12 @@ fit_noise <- function(resid = NULL,
       cols <- which(parcels == as.integer(k))
       if (!length(cols)) return(numeric(0))
       lag_k <- max(as.integer(target), length(phi_parcel[[k]]), 1L)
+      lag_acc <- if (is.null(corr_pool)) lag_k else
+        min(max(lag_k, nrow(corr_pool) - 1L), n_valid - 1L)
       .acvf_from_pooled(
         .pooled_acvf_segments(resid_valid[, cols, drop = FALSE], seg_id_p,
-                              lag_k, center_id = seg$run_id),
-        order = lag_k)
+                              lag_acc, center_id = seg$run_id),
+        order = lag_k, correction = corr_pool)
     }), names(phi_parcel))
     sigma2_parcel <- setNames(
       lapply(names(phi_parcel), function(k)

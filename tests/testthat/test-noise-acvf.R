@@ -217,9 +217,14 @@ test_that("noise_acvf can correct the residual bias", {
   expect_lt(abs(cor$acvf[[1L]][2] / cor$acvf[[1L]][1] - 0.5),
             abs(raw$acvf[[1L]][2] / raw$acvf[[1L]][1] - 0.5))
 
-  expect_error(noise_acvf(R, pooling = "parcel", parcels = rep(1:4, length.out = 40L),
-                          design = X),
-               "not yet supported")
+  # Parcel pooling is corrected too (per-run maps combined by lag pairs).
+  par_raw <- noise_acvf(R, max_lag = 25L, pooling = "parcel",
+                        parcels = rep(1:4, length.out = 40L))
+  par_cor <- noise_acvf(R, max_lag = 25L, pooling = "parcel",
+                        parcels = rep(1:4, length.out = 40L), design = X)
+  expect_true(par_cor$corrected)
+  rho <- function(a) mean(vapply(a$acvf, function(g) g[2] / g[1], 0))
+  expect_lt(abs(rho(par_cor) - 0.5), abs(rho(par_raw) - 0.5))
 })
 
 test_that("noise_acvf reports whether correction was actually applied", {

@@ -38,7 +38,16 @@ feed them back as \code{acvf_correction}.
 
 One matrix is returned per run, because \code{\link[=fit_noise]{fit_noise()}} estimates each run
 separately and the residual operator restricted to a run still involves the
-whole design.
+whole design. Under \code{pooling = "parcel"}, which pools lag products across
+runs, the run matrices are combined in proportion to the lag pairs each run
+contributes.
+
+Projecting out run means and slow drift leaves the map with near-null
+directions (roughly a constant offset across lags). When the correction is
+applied, those directions are fixed by the same short-memory assumption the
+truncated system already makes (the autocovariance is near zero at the end
+of the budget) rather than taken from the data, which keeps the correction
+stable under censoring.
 
 The correction is exact for noise whose autocovariance dies within \code{max_lag}.
 Under long memory it is partial, since truncating the system aliases in
@@ -46,7 +55,7 @@ structure past the budget. With high-pass filtering (DCT, 128 s) a budget
 near 20-25 lags is typically enough; without high-pass it exceeds 150 and the
 approach stops being practical.
 
-Cost is \code{O(max_lag^2 * n_valid * n)} per run, so it is worth caching.
+Cost is \code{O(max_lag^2 * n_valid * r)} per run for a design of rank \code{r}.
 }
 \examples{
 n <- 120

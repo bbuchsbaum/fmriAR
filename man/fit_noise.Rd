@@ -98,7 +98,9 @@ to be the one that actually formed the OLS residuals. A numerical
 orthogonality check rejects detectable mismatches, including typical raw,
 GLS, robust, or unrelated residuals. Orthogonality cannot prove the exact
 residual-forming provenance, so the caller remains responsible for
-supplying the matching design. Currently supported for \code{pooling = "global"} and \code{"run"} with \code{method = "ar"}.}
+supplying the matching design. Supported for every pooling mode with
+\code{method = "ar"}; under \code{pooling = "parcel"} the per-run bias maps are
+combined in proportion to the lag pairs each run contributes.}
 
 \item{acvf_correction}{Precomputed bias matrices from \code{\link[=acvf_bias_matrix]{acvf_bias_matrix()}},
 as an alternative to \code{design} when many datasets share one design. A single

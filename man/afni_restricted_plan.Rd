@@ -26,9 +26,18 @@ afni_restricted_plan(
 \item{roots}{either a single list with elements named as needed
 - for p=3: list(a, r1, t1, vrt = 1.0)
 - for p=5: list(a, r1, t1, r2, t2, vrt = 1.0)
-or a named list of such lists keyed by parcel id (character) for per-parcel specs.}
+or a named list of such lists keyed by parcel id (character) for per-parcel specs.
+As in AFNI, \code{a}, \code{r1}, \code{r2} must be non-negative (values above 0.95
+are clamped to 0.95) and angles are clamped to \verb{[0, pi]}. \code{vrt} is
+AFNI's signal-to-total variance ratio \code{s^2 / (s^2 + w^2)} for additive
+white noise \code{w}; it is used when \code{estimate_ma1 = FALSE}.}
 
-\item{estimate_ma1}{logical, if TRUE estimate MA(1) on AR residuals to mimic AFNI's additive white}
+\item{estimate_ma1}{logical. If \code{TRUE}, estimate an MA(1) term from the
+AR-filtered voxels to stand in for AFNI's additive white noise (\code{vrt} is
+then ignored). If \code{FALSE}, the white-noise share is taken from \code{vrt}: for
+\code{vrt < 1} the plan is the exact ARMA(p, p) equivalent of AR(p) plus white
+noise, so its autocorrelation is \code{vrt} times the AR autocorrelation at
+every non-zero lag; \code{vrt = 1} (default) gives the pure AR(p).}
 
 \item{exact_first}{apply exact AR(1) scaling at segment starts (harmless here; default TRUE)}
 }

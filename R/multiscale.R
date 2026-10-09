@@ -131,14 +131,19 @@
   parcel_means_fast(resid, parcels, na.rm = na.rm)
 }
 
+# Per-parcel estimates at one scale. `R` holds the valid frames (rows) of every
+# voxel and `labels` the parcel of each voxel at this scale; each parcel is
+# estimated from its voxels' pooled autocovariance.
+#
 # `lag_max` must cover the pooling target, not just the order selected for this
 # scale. Sizing the acvf to the selected order alone leaves .ms_pad() zero-
 # filling the remaining lags, and Yule-Walker on a zero-filled autocovariance
 # returns explosive coefficients that only the stationarity clamp hides.
-.ms_estimate_scale <- function(M, estimator, run_starts0 = NULL, lag_max = 0L,
-                               center_id = NULL) {
-  ids <- colnames(M)
-  n <- nrow(M)
+.ms_estimate_scale <- function(R, labels, estimator, run_starts0 = NULL, lag_max = 0L,
+                               center_id = NULL, correction = NULL) {
+  labels <- as.integer(labels)
+  ids <- as.character(sort(unique(labels)))
+  n <- nrow(R)
   starts0 <- if (is.null(run_starts0)) 0L else as.integer(run_starts0)
   if (!length(starts0)) starts0 <- 0L
   seg_id <- cumsum(seq_len(n) %in% (starts0 + 1L))
@@ -147,18 +152,18 @@
   acvf_by <- setNames(vector("list", length(ids)), ids)
   sigma2_by <- setNames(vector("list", length(ids)), ids)
   for (id in ids) {
-    fit <- estimator(M[, id])
+    Y <- R[, labels == as.integer(id), drop = FALSE]
+    fit <- estimator(Y)
     phi_by[[id]] <- fit$phi
     sigma2_by[[id]] <- if (is.null(fit$sigma2)) NA_real_ else fit$sigma2
     lag_id <- max(as.integer(lag_max), fit$order[["p"]], 1L)
-    # segmented_acvf_cpp centres each segment on its own mean. Once censoring
-    # splits a run into short fragments that destroys the autocorrelation being
-    # measured (a 2-frame fragment gives rho1 = -1 by construction), which is
-    # the same defect fixed in .pooled_acvf_segments. Estimate the mean per run
-    # and keep lag products inside segments.
-    pooled <- .pooled_acvf_segments(matrix(M[, id], ncol = 1L), seg_id, lag_id,
-                                    center_id = center_id)
-    acvf_by[[id]] <- .acvf_from_pooled(pooled, order = lag_id)
+    # The mean is estimated per run, and lag products stay inside segments;
+    # centring each censoring fragment on its own mean destroys the
+    # autocorrelation being measured.
+    lag_acc <- if (is.null(correction)) lag_id else
+      min(max(lag_id, nrow(correction) - 1L), n - 1L)
+    pooled <- .pooled_acvf_segments(Y, seg_id, lag_acc, center_id = center_id)
+    acvf_by[[id]] <- .acvf_from_pooled(pooled, order = lag_id, correction = correction)
   }
   list(phi = phi_by, acvf = acvf_by, sigma2 = sigma2_by)
 }

@@ -34,6 +34,55 @@
   c(p1, p2, p3, p4, p5)
 }
 
+# AFNI (armacor.c) rejects negative pole parameters rather than clamping them;
+# clamping silently turned a sign error into a different noise model. Values
+# above 0.95 and angles outside [0, pi] are clamped, as AFNI does.
+.afni_check_spec <- function(spec, p) {
+  need <- if (p == 3L) c("a", "r1", "t1") else c("a", "r1", "t1", "r2", "t2")
+  miss <- setdiff(need, names(spec))
+  if (length(miss)) {
+    stop("AFNI root spec is missing: ", paste(miss, collapse = ", "), call. = FALSE)
+  }
+  vals <- unlist(spec[need])
+  if (!is.numeric(vals) || any(!is.finite(vals))) {
+    stop("AFNI root parameters must be finite numbers", call. = FALSE)
+  }
+  mods <- intersect(c("a", "r1", "r2"), need)
+  if (any(unlist(spec[mods]) < 0)) {
+    stop("AFNI root parameters a, r1, r2 must be >= 0 (AFNI rejects negative ",
+         "values)", call. = FALSE)
+  }
+  vrt <- spec$vrt %||% 1
+  if (length(vrt) != 1L || !is.finite(vrt) || vrt <= 0) {
+    stop("'vrt' must be a single number in (0, 1]", call. = FALSE)
+  }
+  invisible(TRUE)
+}
+
+# MA part implied by AFNI's additive white noise. AFNI models the noise as an
+# AR(p) signal plus white noise, vrt = s^2 / (s^2 + w^2). Then
+#   phi(B) y = e + phi(B) w,
+# whose right-hand side is an MA(p) with autocovariance
+#   c_k = delta_k sigma_e^2 + sigma_w^2 sum_j phi~_j phi~_{j+k},
+# phi~ = (1, -phi). Spectral factorisation (roots outside the unit circle)
+# gives the invertible theta, so ARMA(p, p) reproduces AFNI's correlations
+# exactly: rho_k = vrt * rho_AR(k) for k >= 1.
+.afni_theta_from_vrt <- function(phi, vrt) {
+  p <- length(phi)
+  if (!p || vrt >= 1) return(numeric(0))
+  g <- arma_acvf_cpp(phi, numeric(0), 0L)       # AR variance, sigma_e = 1
+  if (!is.finite(g[1])) return(numeric(0))
+  s2w <- g[1] * (1 - vrt) / vrt
+  pt <- c(1, -phi)
+  ck <- vapply(0:p, function(k) sum(pt[seq_len(p + 1L - k)] * pt[seq_len(p + 1L - k) + k]), 0)
+  ck <- s2w * ck
+  ck[1] <- ck[1] + 1
+  coefs <- c(rev(ck[-1]), ck)                   # z^0 .. z^(2p), symmetric
+  r <- polyroot(coefs)
+  r_out <- r[order(-Mod(r))][seq_len(p)]        # the p roots outside |z| = 1
+  as.numeric(.coeff_from_roots(r_out)[-1L])
+}
+
 # local helper: 0-based run starts from run labels
 .afni_run_starts0 <- function(runs, n) {
   if (is.null(runs)) return(0L)
@@ -79,7 +128,16 @@
 #'        - for p=3: list(a, r1, t1, vrt = 1.0)
 #'        - for p=5: list(a, r1, t1, r2, t2, vrt = 1.0)
 #'      or a named list of such lists keyed by parcel id (character) for per-parcel specs.
-#' @param estimate_ma1 logical, if TRUE estimate MA(1) on AR residuals to mimic AFNI's additive white
+#'      As in AFNI, `a`, `r1`, `r2` must be non-negative (values above 0.95
+#'      are clamped to 0.95) and angles are clamped to `[0, pi]`. `vrt` is
+#'      AFNI's signal-to-total variance ratio `s^2 / (s^2 + w^2)` for additive
+#'      white noise `w`; it is used when `estimate_ma1 = FALSE`.
+#' @param estimate_ma1 logical. If `TRUE`, estimate an MA(1) term from the
+#'   AR-filtered voxels to stand in for AFNI's additive white noise (`vrt` is
+#'   then ignored). If `FALSE`, the white-noise share is taken from `vrt`: for
+#'   `vrt < 1` the plan is the exact ARMA(p, p) equivalent of AR(p) plus white
+#'   noise, so its autocorrelation is `vrt` times the AR autocorrelation at
+#'   every non-zero lag; `vrt = 1` (default) gives the pure AR(p).
 #' @param exact_first apply exact AR(1) scaling at segment starts (harmless here; default TRUE)
 #' @return An `fmriAR_plan` with `method = "afni"` that can be supplied to
 #'   [whiten_apply()].
@@ -93,18 +151,35 @@ afni_restricted_plan <- function(resid, runs = NULL, parcels = NULL,
   n <- nrow(resid); v <- ncol(resid)
 
   as_phi <- function(spec) {
+    .afni_check_spec(spec, p)
     if (p == 3L) .afni_phi_ar3(spec$a, spec$r1, spec$t1) else
       .afni_phi_ar5(spec$a, spec$r1, spec$t1, spec$r2, spec$t2)
+  }
+  warned <- FALSE
+  # MA part from vrt when it is not estimated. AFNI treats vrt <= 0.01 as
+  # white noise.
+  model_from_spec <- function(spec) {
+    phi <- as_phi(spec)
+    vrt <- min(spec$vrt %||% 1, 1)
+    if (isTRUE(estimate_ma1) && vrt < 1 && !warned) {
+      warning("afni_restricted_plan: 'vrt' is ignored when estimate_ma1 = TRUE; ",
+              "set estimate_ma1 = FALSE to use it", call. = FALSE)
+      warned <<- TRUE
+    }
+    if (vrt <= 0.01) return(list(phi = numeric(0), theta = numeric(0)))
+    list(phi = phi,
+         theta = if (isTRUE(estimate_ma1)) numeric(0) else .afni_theta_from_vrt(phi, vrt))
   }
 
   # construct phi lists
   if (is.null(parcels)) {
     # global/run plan from a single spec
     stopifnot(is.list(roots), !is.null(roots$a))
-    phi <- as_phi(roots)
+    mod <- model_from_spec(roots)
+    phi <- mod$phi
     phi_list <- list(phi)
-    theta_list <- list(numeric(0))  # ensure theta placeholder exists
-    order_vec <- c(p = length(phi), q = 0L)
+    theta_list <- list(mod$theta)
+    order_vec <- c(p = length(phi), q = length(mod$theta))
     plan <- new_whiten_plan(phi = phi_list, theta = theta_list, order = order_vec,
                             runs = runs, exact_first = isTRUE(exact_first),
                             method = "afni", pooling = if (is.null(runs)) "global" else "run")
@@ -118,8 +193,6 @@ afni_restricted_plan <- function(resid, runs = NULL, parcels = NULL,
       } else {
         plan$theta <- list(numeric(0))
       }
-    } else {
-      plan$theta <- list(numeric(0))
     }
     return(plan)
   }
@@ -144,8 +217,10 @@ afni_restricted_plan <- function(resid, runs = NULL, parcels = NULL,
     key <- as.character(pid)
     spec <- roots_by[[key]]
     if (is.null(spec)) spec <- roots_by[[1]] %||% roots_by[[names(roots_by)[1]]]
-    phi <- as_phi(spec)
+    mod <- model_from_spec(spec)
+    phi <- mod$phi
     phi_by[[key]] <- phi
+    th_by[key] <- list(mod$theta)
 
     if (isTRUE(estimate_ma1)) {
       cols <- which(parcels == pid)
@@ -154,7 +229,8 @@ afni_restricted_plan <- function(resid, runs = NULL, parcels = NULL,
     }
   }
 
-  order_vec <- c(p = p, q = if (isTRUE(estimate_ma1)) 1L else 0L)
+  order_vec <- c(p = max(vapply(phi_by, length, 0L)),
+                 q = max(0L, vapply(th_by, length, 0L)))
   new_whiten_plan(
     phi = NULL, theta = NULL, order = order_vec, runs = runs,
     exact_first = isTRUE(exact_first), method = "afni", pooling = "parcel",

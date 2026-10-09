@@ -11,6 +11,28 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
+// enforce_ar_stationarity_cpp
+arma::vec enforce_ar_stationarity_cpp(arma::vec phi);
+RcppExport SEXP _fmriAR_enforce_ar_stationarity_cpp(SEXP phiSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< arma::vec >::type phi(phiSEXP);
+    rcpp_result_gen = Rcpp::wrap(enforce_ar_stationarity_cpp(phi));
+    return rcpp_result_gen;
+END_RCPP
+}
+// enforce_ma_invertibility_cpp
+arma::vec enforce_ma_invertibility_cpp(arma::vec theta);
+RcppExport SEXP _fmriAR_enforce_ma_invertibility_cpp(SEXP thetaSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< arma::vec >::type theta(thetaSEXP);
+    rcpp_result_gen = Rcpp::wrap(enforce_ma_invertibility_cpp(theta));
+    return rcpp_result_gen;
+END_RCPP
+}
 // hr_arma_fit_cpp
 Rcpp::List hr_arma_fit_cpp(const arma::vec& y_in, int p, int q, int p_big, int iter);
 RcppExport SEXP _fmriAR_hr_arma_fit_cpp(SEXP y_inSEXP, SEXP pSEXP, SEXP qSEXP, SEXP p_bigSEXP, SEXP iterSEXP) {
@@ -158,6 +180,8 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
+    {"_fmriAR_enforce_ar_stationarity_cpp", (DL_FUNC) &_fmriAR_enforce_ar_stationarity_cpp, 1},
+    {"_fmriAR_enforce_ma_invertibility_cpp", (DL_FUNC) &_fmriAR_enforce_ma_invertibility_cpp, 1},
     {"_fmriAR_hr_arma_fit_cpp", (DL_FUNC) &_fmriAR_hr_arma_fit_cpp, 5},
     {"_fmriAR_parcel_means_cpp", (DL_FUNC) &_fmriAR_parcel_means_cpp, 4},
     {"_fmriAR_run_avg_acvf_cpp", (DL_FUNC) &_fmriAR_run_avg_acvf_cpp, 2},
