@@ -7,7 +7,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">fmriAR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.4.1</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.4.2</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -118,7 +118,11 @@ from <code>0:q_max</code>.</p></dd>
 
 
 <dt id="arg-p-max">p_max<a class="anchor" aria-label="anchor" href="#arg-p-max"></a></dt>
-<dd><p>Maximum AR order when <code>p = "auto"</code>. For <code>method = "arma"</code>,
+<dd><p>Maximum AR order when <code>p = "auto"</code>. The order is chosen by
+BIC whose sample size is the number of frames times the effective number
+of independent voxels (a design effect from the mean inter-voxel
+correlation), so pooling many independent voxels can support a higher
+order than one series would. For <code>method = "arma"</code>,
 <code>p = "auto"</code> searches <code>0:p_max</code> jointly with the MA order by BIC on the
 pooled Hannan–Rissanen regression.</p></dd>
 

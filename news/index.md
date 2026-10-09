@@ -1,5 +1,44 @@
 # Changelog
 
+## fmriAR 0.4.2
+
+### Fixes
+
+- AR order selection (`p = "auto"`) scored BIC on the frame count alone,
+  treating many pooled voxels as one series’ worth of evidence. A
+  voxel-pooled AR(2) with phi = (0.5, -0.2) could come back AR(1) (as in
+  the package vignette), leaving residual autocorrelation behind. The
+  BIC sample size is now frames times the effective number of
+  independent voxels, as the ARMA search already did. AR(2) over 60
+  voxels: residual autocorrelation after whitening 0.025 -\> 0.004;
+  ARMA(1,1) noise fitted with AR: 0.053 -\> 0.002. Single-voxel fits,
+  white noise, and shared-signal data are unchanged, and
+  [`fit_noise()`](https://bbuchsbaum.github.io/fmriAR/reference/fit_noise.md)
+  timing is unchanged.
+
+### Documentation
+
+- The vignette described parcel pooling and ARMA estimation as working
+  on mean time series; both now pool over voxels and the text says so.
+  New sections cover censoring (and dropping censored rows before the
+  final fit), residual-bias correction, automatic ARMA order selection,
+  AFNI’s `vrt`, and HAC standard errors. Its diagnostics use
+  [`acorr_diagnostics()`](https://bbuchsbaum.github.io/fmriAR/reference/acorr_diagnostics.md)
+  with run boundaries respected.
+- README updated to match: OpenMP is on whenever the toolchain supports
+  it, bias correction covers every pooling mode, and `fmriAR.use_cpp_hr`
+  affects only the internal single-series helper.
+
+### Tests
+
+- 16 further regression tests close the remaining gaps from the audit:
+  the C++ lag-sum and Hannan-Rissanen kernels against plain-R
+  references, censor validation, HAC run boundaries, parcel censor
+  reporting, the `compat$whiten_with_phi()` default, ARMA failure
+  fallback and refinement iterations, AFNI spec validation, and an
+  end-to-end check that GLS t-tests keep a nominal false-positive rate
+  for AR and ARMA noise.
+
 ## fmriAR 0.4.1
 
 Numbers are 0.4.0 -\> 0.4.1 from

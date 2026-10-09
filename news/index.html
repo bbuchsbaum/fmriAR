@@ -7,7 +7,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">fmriAR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.4.1</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.4.2</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -36,6 +36,22 @@
       <small>Source: <a href="https://github.com/bbuchsbaum/fmriAR/blob/main/NEWS.md" class="external-link"><code>NEWS.md</code></a></small>
     </div>
 
+    <div class="section level2">
+<h2 class="pkg-version" data-toc-text="0.4.2" id="fmriar-042">fmriAR 0.4.2<a class="anchor" aria-label="anchor" href="#fmriar-042"></a></h2>
+<div class="section level3">
+<h3 id="fixes-0-4-2">Fixes<a class="anchor" aria-label="anchor" href="#fixes-0-4-2"></a></h3>
+<ul><li>AR order selection (<code>p = "auto"</code>) scored BIC on the frame count alone, treating many pooled voxels as one series’ worth of evidence. A voxel-pooled AR(2) with phi = (0.5, -0.2) could come back AR(1) (as in the package vignette), leaving residual autocorrelation behind. The BIC sample size is now frames times the effective number of independent voxels, as the ARMA search already did. AR(2) over 60 voxels: residual autocorrelation after whitening 0.025 -&gt; 0.004; ARMA(1,1) noise fitted with AR: 0.053 -&gt; 0.002. Single-voxel fits, white noise, and shared-signal data are unchanged, and <code><a href="../reference/fit_noise.html">fit_noise()</a></code> timing is unchanged.</li>
+</ul></div>
+<div class="section level3">
+<h3 id="documentation-0-4-2">Documentation<a class="anchor" aria-label="anchor" href="#documentation-0-4-2"></a></h3>
+<ul><li>The vignette described parcel pooling and ARMA estimation as working on mean time series; both now pool over voxels and the text says so. New sections cover censoring (and dropping censored rows before the final fit), residual-bias correction, automatic ARMA order selection, AFNI’s <code>vrt</code>, and HAC standard errors. Its diagnostics use <code><a href="../reference/acorr_diagnostics.html">acorr_diagnostics()</a></code> with run boundaries respected.</li>
+<li>README updated to match: OpenMP is on whenever the toolchain supports it, bias correction covers every pooling mode, and <code>fmriAR.use_cpp_hr</code> affects only the internal single-series helper.</li>
+</ul></div>
+<div class="section level3">
+<h3 id="tests-0-4-2">Tests<a class="anchor" aria-label="anchor" href="#tests-0-4-2"></a></h3>
+<ul><li>16 further regression tests close the remaining gaps from the audit: the C++ lag-sum and Hannan-Rissanen kernels against plain-R references, censor validation, HAC run boundaries, parcel censor reporting, the <code>compat$whiten_with_phi()</code> default, ARMA failure fallback and refinement iterations, AFNI spec validation, and an end-to-end check that GLS t-tests keep a nominal false-positive rate for AR and ARMA noise.</li>
+</ul></div>
+</div>
     <div class="section level2">
 <h2 class="pkg-version" data-toc-text="0.4.1" id="fmriar-041">fmriAR 0.4.1<a class="anchor" aria-label="anchor" href="#fmriar-041"></a></h2>
 <p>Numbers are 0.4.0 -&gt; 0.4.1 from <code>tools/validation/accuracy_benchmark.R</code>; every metric not listed is unchanged.</p>

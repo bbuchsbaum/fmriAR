@@ -82,9 +82,13 @@ fit_noise(
 
 - p_max:
 
-  Maximum AR order when `p = "auto"`. For `method = "arma"`,
-  `p = "auto"` searches `0:p_max` jointly with the MA order by BIC on
-  the pooled Hannan–Rissanen regression.
+  Maximum AR order when `p = "auto"`. The order is chosen by BIC whose
+  sample size is the number of frames times the effective number of
+  independent voxels (a design effect from the mean inter-voxel
+  correlation), so pooling many independent voxels can support a higher
+  order than one series would. For `method = "arma"`, `p = "auto"`
+  searches `0:p_max` jointly with the MA order by BIC on the pooled
+  Hannan–Rissanen regression.
 
 - q_max:
 

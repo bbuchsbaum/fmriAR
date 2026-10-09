@@ -22,7 +22,7 @@
 
     <a class="navbar-brand me-2" href="index.html">fmriAR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.4.1</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.4.2</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -98,7 +98,8 @@
 <span><span class="va">xyw</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/whiten_apply.html">whiten_apply</a></span><span class="op">(</span><span class="va">plan</span>, <span class="va">X</span>, <span class="va">Y</span>, runs <span class="op">=</span> <span class="va">runs</span><span class="op">)</span></span>
 <span><span class="va">fit</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/stats/lmfit.html" class="external-link">lm.fit</a></span><span class="op">(</span><span class="va">xyw</span><span class="op">$</span><span class="va">X</span>, <span class="va">xyw</span><span class="op">$</span><span class="va">Y</span><span class="op">)</span></span>
 <span><span class="va">se</span>  <span class="op">&lt;-</span> <span class="fu"><a href="reference/sandwich_from_whitened_resid.html">sandwich_from_whitened_resid</a></span><span class="op">(</span><span class="va">xyw</span><span class="op">$</span><span class="va">X</span>, <span class="va">xyw</span><span class="op">$</span><span class="va">Y</span>, beta <span class="op">=</span> <span class="va">fit</span><span class="op">$</span><span class="va">coefficients</span><span class="op">)</span></span>
-<span><span class="va">ac</span>  <span class="op">&lt;-</span> <span class="fu"><a href="reference/acorr_diagnostics.html">acorr_diagnostics</a></span><span class="op">(</span><span class="va">xyw</span><span class="op">$</span><span class="va">Y</span> <span class="op">-</span> <span class="va">xyw</span><span class="op">$</span><span class="va">X</span> <span class="op"><a href="https://rdrr.io/r/base/matmult.html" class="external-link">%*%</a></span> <span class="va">fit</span><span class="op">$</span><span class="va">coefficients</span><span class="op">)</span></span></code></pre></div>
+<span><span class="va">ac</span>  <span class="op">&lt;-</span> <span class="fu"><a href="reference/acorr_diagnostics.html">acorr_diagnostics</a></span><span class="op">(</span><span class="va">xyw</span><span class="op">$</span><span class="va">Y</span> <span class="op">-</span> <span class="va">xyw</span><span class="op">$</span><span class="va">X</span> <span class="op"><a href="https://rdrr.io/r/base/matmult.html" class="external-link">%*%</a></span> <span class="va">fit</span><span class="op">$</span><span class="va">coefficients</span>, runs <span class="op">=</span> <span class="va">runs</span><span class="op">)</span></span></code></pre></div>
+<p>With censoring, the scrubbed rows stay in the whitened output and are listed in <code>xyw$censor</code>; drop them before fitting, e.g. <code>lm.fit(xyw$X[-xyw$censor, ], xyw$Y[-xyw$censor, ])</code>.</p>
 <p>One-step shortcut (fits the plan from <code>Y</code> and <code>X</code> internally):</p>
 <div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">xyw</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/whiten.html">whiten</a></span><span class="op">(</span><span class="va">X</span>, <span class="va">Y</span>, runs <span class="op">=</span> <span class="va">runs</span>, method <span class="op">=</span> <span class="st">"ar"</span>, p <span class="op">=</span> <span class="st">"auto"</span><span class="op">)</span></span></code></pre></div>
@@ -108,23 +109,23 @@
 </h2>
 <ul>
 <li>
-<strong>AR and ARMA plans.</strong> <code>method = "ar"</code> selects order by BIC on a Yule–Walker fit (<code>p = "auto"</code>). <code>method = "arma"</code> uses Hannan–Rissanen
-<ol start="1982" style="list-style-type: decimal">
-<li>on the run-mean residual series.</li>
-</ol>
-</li>
+<strong>AR and ARMA plans.</strong> <code>method = "ar"</code> fits Yule–Walker on autocovariances pooled over voxels and selects the order by BIC (<code>p = "auto"</code>), counting pooled voxels at their effective number. <code>method = "arma"</code> uses Hannan–Rissanen (1982) pooled over voxels, with <code>p</code>/<code>q = "auto"</code> for BIC order selection.</li>
 <li>
-<strong>Pooling.</strong> <code>"global"</code> (one filter), <code>"run"</code> (one per run), or <code>"parcel"</code> (one per parcel, with optional multiscale shrinkage via <code>parcel_sets</code>).</li>
+<strong>Exact whitening at run starts.</strong> Every run and post-censoring segment is whitened with the exact stationary start of the fitted AR/ARMA model, so the result equals exact GLS within each segment (<code>exact_first = "ar1"</code>, the default).</li>
 <li>
-<strong>Censoring.</strong> Pass motion-scrubbed frames as indices or a logical mask; they are dropped from estimation and treated as segment breaks when whitening.</li>
+<strong>Pooling.</strong> <code>"global"</code> (one filter), <code>"run"</code> (one per run), or <code>"parcel"</code> (one per parcel, estimated from its voxels, with optional multiscale shrinkage via <code>parcel_sets</code>).</li>
 <li>
-<strong>Residual-bias correction.</strong> Autocovariance from GLM residuals is biased low (<code>E[ehat ehat'] = M Sigma M</code>). Pass <code>design = X</code> to <code><a href="reference/fit_noise.html">fit_noise()</a></code> or <code><a href="reference/noise_acvf.html">noise_acvf()</a></code> to undo that bias (AR, global/run pooling). Cache the map with <code><a href="reference/acvf_bias_matrix.html">acvf_bias_matrix()</a></code> when many datasets share a design.</li>
+<strong>Censoring.</strong> Pass motion-scrubbed frames as indices or a logical mask; they are dropped from estimation and treated as segment breaks when whitening. <code><a href="reference/whiten_apply.html">whiten_apply()</a></code> reuses the plan’s censor set for data of the same length.</li>
+<li>
+<strong>Residual-bias correction.</strong> Autocovariance from GLM residuals is biased low (<code>E[ehat ehat'] = M Sigma M</code>). Pass <code>design = X</code> to <code><a href="reference/fit_noise.html">fit_noise()</a></code> or <code><a href="reference/noise_acvf.html">noise_acvf()</a></code> to undo that bias (<code>method = "ar"</code>, any pooling, with or without censoring). Cache the map with <code><a href="reference/acvf_bias_matrix.html">acvf_bias_matrix()</a></code> when many datasets share a design.</li>
+<li>
+<strong>Standard errors.</strong> <code><a href="reference/sandwich_from_whitened_resid.html">sandwich_from_whitened_resid()</a></code> gives iid, HC0, or Newey–West HAC (<code>type = "hac"</code>, within runs) standard errors, and handles rank-deficient designs.</li>
 <li>
 <strong>Noise scale on the plan.</strong> An <code>fmriAR_plan</code> now stores <code>gamma</code> (voxel-scale autocovariance) and <code>sigma2</code> (innovation variance) per pooling unit, not just the AR/MA coefficients.</li>
 <li>
 <strong>Autocovariance without a model.</strong> <code><a href="reference/noise_acvf.html">noise_acvf()</a></code> returns the same run- and censor-aware covariances <code><a href="reference/fit_noise.html">fit_noise()</a></code> uses internally, plus pair counts so you can see how much data backs each lag.</li>
 <li>
-<strong>AFNI-style restricted AR.</strong> <code><a href="reference/afni_restricted_plan.html">afni_restricted_plan()</a></code> builds a plan from AFNI root parameters (Cox, 2012) for pipeline comparison.</li>
+<strong>AFNI-style restricted AR.</strong> <code><a href="reference/afni_restricted_plan.html">afni_restricted_plan()</a></code> builds a plan from AFNI root parameters (Cox, 2012) for pipeline comparison, including AFNI’s additive white-noise ratio <code>vrt</code>.</li>
 </ul>
 <p>See <code><a href="articles/fmriAR-introduction.html">vignette("fmriAR-introduction")</a></code> and <code><a href="reference/fit_noise.html">?fit_noise</a></code> for parcel pooling, ARMA, and AFNI examples.</p>
 </div>
@@ -133,10 +134,16 @@
 </h2>
 <ul>
 <li>
-<code>options(fmriAR.max_threads = n)</code> — cap OpenMP threads when the package is built with OpenMP (optional; off by default in the CRAN sources).</li>
+<code>options(fmriAR.max_threads = n)</code> — cap the OpenMP threads used for whitening. OpenMP is used automatically when the compiler supports it; results are identical for any thread count.</li>
 <li>
-<code>options(fmriAR.use_cpp_hr = TRUE)</code> — use the C++ Hannan–Rissanen estimator (default). Set <code>FALSE</code> to fall back to the R implementation.</li>
+<code>options(fmriAR.use_cpp_hr = TRUE)</code> — use the C++ single-series Hannan–Rissanen estimator (default) in the internal <code>hr_arma()</code> helper. Set <code>FALSE</code> to fall back to the R implementation. <code><a href="reference/fit_noise.html">fit_noise()</a></code> uses the pooled estimator regardless.</li>
 </ul>
+</div>
+<div class="section level2">
+<h2 id="validation">Validation<a class="anchor" aria-label="anchor" href="#validation"></a>
+</h2>
+<p><code>tools/validation/accuracy_benchmark.R</code> (in the source repository) runs seeded accuracy, calibration, and timing scenarios through the exported API, so any two installed versions can be compared directly:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode sh"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" tabindex="-1"></a><span class="ex">Rscript</span> tools/validation/accuracy_benchmark.R <span class="op">&lt;</span>lib_path_or_-<span class="op">&gt;</span> results.rds</span></code></pre></div>
 </div>
 <div class="section level2">
 <h2 id="references">References<a class="anchor" aria-label="anchor" href="#references"></a>

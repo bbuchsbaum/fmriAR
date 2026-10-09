@@ -20,7 +20,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">fmriAR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.4.1</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.4.2</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -80,9 +80,11 @@ fast, while the R interface stays compact and flexible.</p>
 an AR model to residuals from an initial OLS regression, then apply the
 resulting run-aware whitening plan to both the design matrix and the
 voxel data. With the innovations in hand we check that low-lag
-autocorrelation has been suppressed, explore how multiscale pooling
-stabilises parcel-level estimates, and finish with a brief look at ARMA
-models when MA structure remains.</p>
+autocorrelation has been suppressed. We then cover censored (scrubbed)
+frames, correcting the bias that the GLM projection puts into residual
+autocorrelation, parcel pooling with multiscale shrinkage, ARMA models
+with automatic order selection, AFNI-style restricted models, and
+standard errors.</p>
 </div>
 <div class="section level2">
 <h2 id="simulating-data-for-the-examples">Simulating data for the examples<a class="anchor" aria-label="anchor" href="#simulating-data-for-the-examples"></a>
@@ -134,7 +136,15 @@ noise.</p>
 </h2>
 <p>The primary entry point is <code><a href="../reference/fit_noise.html">fit_noise()</a></code>. When
 <code>method = "ar"</code> and <code>p = "auto"</code>, the function
-selects the AR order per run using BIC, then enforces stationarity.</p>
+selects the AR order per run using BIC (searching up to
+<code>p_max</code>), then enforces stationarity. An explicit order such
+as <code>p = 2</code> is used as given.</p>
+<p><code>exact_first = "ar1"</code> (the default; the name is
+historical) whitens the start of every run, and every segment after a
+censored frame, with the exact stationary initialisation of the fitted
+model. For any AR or ARMA order this makes the whitening identical to
+exact GLS within each segment; for an AR(1) it reduces to the familiar
+<code>sqrt(1 - phi^2)</code> scaling of the first sample.</p>
 <div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">plan_ar</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fit_noise.html">fit_noise</a></span><span class="op">(</span></span>
 <span>  <span class="va">resid</span>,</span>
@@ -149,13 +159,13 @@ selects the AR order per run using BIC, then enforces stationarity.</p>
 <span><span class="va">plan_ar</span></span>
 <span><span class="co"># fmriAR whitening plan</span></span>
 <span><span class="co">#   Method: AR</span></span>
-<span><span class="co">#   Orders: p = 1, q = 0</span></span>
+<span><span class="co">#   Orders: p = 2, q = 0</span></span>
 <span><span class="co">#   Pooling: run</span></span>
 <span><span class="co">#   Runs: 2 (1, 2)</span></span>
 <span><span class="co">#   Segment start: exact stationary</span></span>
 <span><span class="co">#   Coefficients:</span></span>
-<span><span class="co">#     1: phi = 0.407</span></span>
-<span><span class="co">#     2: phi = 0.403</span></span></code></pre></div>
+<span><span class="co">#     1: phi = 0.485, -0.193</span></span>
+<span><span class="co">#     2: phi = 0.482, -0.196</span></span></code></pre></div>
 <p>The returned <code>fmriAR_plan</code> holds run-specific AR
 coefficients and metadata about the estimation procedure.</p>
 </div>
@@ -169,69 +179,54 @@ estimation or downstream analyses.</p>
 <code class="sourceCode R"><span><span class="va">whitened</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/whiten_apply.html">whiten_apply</a></span><span class="op">(</span><span class="va">plan_ar</span>, <span class="va">X</span>, <span class="va">Y</span>, runs <span class="op">=</span> <span class="va">runs</span><span class="op">)</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/utils/str.html" class="external-link">str</a></span><span class="op">(</span><span class="va">whitened</span><span class="op">)</span></span>
 <span><span class="co"># List of 2</span></span>
-<span><span class="co">#  $ X: num [1:240, 1:2] 0.914 0.593 0.593 0.593 0.593 ...</span></span>
+<span><span class="co">#  $ X: num [1:240, 1:2] 0.896 0.582 0.708 0.708 0.708 ...</span></span>
 <span><span class="co">#   ..- attr(*, "dimnames")=List of 2</span></span>
 <span><span class="co">#   .. ..$ : NULL</span></span>
 <span><span class="co">#   .. ..$ : chr [1:2] "intercept" "task"</span></span>
-<span><span class="co">#  $ Y: num [1:240, 1:60] -1.3645 -1.7121 0.0755 -0.6306 0.0286 ...</span></span></code></pre></div>
+<span><span class="co">#  $ Y: num [1:240, 1:60] -1.3388 -1.6799 -0.0306 -1.0101 -0.0617 ...</span></span></code></pre></div>
 <p>By default the function returns whitened <code>X</code> and
-<code>Y</code>. You can compute GLS coefficients with a single linear
-solve:</p>
+<code>Y</code>; your inputs are never modified. Whitening runs in
+parallel over voxels when the package was built with OpenMP; cap the
+thread count with <code>options(fmriAR.max_threads = k)</code>. You can
+compute GLS coefficients with a single linear solve:</p>
 <div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">Xw</span> <span class="op">&lt;-</span> <span class="va">whitened</span><span class="op">$</span><span class="va">X</span></span>
 <span><span class="va">Yw</span> <span class="op">&lt;-</span> <span class="va">whitened</span><span class="op">$</span><span class="va">Y</span></span>
 <span><span class="va">beta_gls</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/qr.html" class="external-link">qr.solve</a></span><span class="op">(</span><span class="va">Xw</span>, <span class="va">Yw</span><span class="op">[</span>, <span class="fl">1</span><span class="op">:</span><span class="fl">5</span><span class="op">]</span><span class="op">)</span></span>
 <span><span class="va">beta_gls</span></span>
-<span><span class="co">#                 [,1]       [,2]        [,3]      [,4]       [,5]</span></span>
-<span><span class="co"># intercept -0.1993785 0.02265309 -0.01111047 0.0902481 0.05321269</span></span>
-<span><span class="co"># task       1.6996789 1.40018444  1.12676373 1.4552355 1.51189501</span></span></code></pre></div>
+<span><span class="co">#                 [,1]       [,2]      [,3]       [,4]       [,5]</span></span>
+<span><span class="co"># intercept -0.1728998 0.03706529 -0.038110 0.08369211 0.03793566</span></span>
+<span><span class="co"># task       1.6604451 1.38204780  1.178319 1.46310266 1.53959638</span></span></code></pre></div>
 </div>
 <div class="section level2">
 <h2 id="inspecting-innovations">Inspecting innovations<a class="anchor" aria-label="anchor" href="#inspecting-innovations"></a>
 </h2>
 <p>The whitened residuals (innovations) should look close to white
-noise. The helper below computes the average absolute autocorrelation
-across voxels.</p>
+noise. <code><a href="../reference/acorr_diagnostics.html">acorr_diagnostics()</a></code> computes each voxel’s
+autocorrelation, centring each run separately and never pairing frames
+across a run boundary, and then averages across voxels
+(<code>aggregate = "none"</code> returns the per-voxel matrix
+instead).</p>
 <div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">innov_var</span> <span class="op">&lt;-</span> <span class="va">Yw</span> <span class="op">-</span> <span class="va">Xw</span> <span class="op"><a href="https://rdrr.io/r/base/matmult.html" class="external-link">%*%</a></span> <span class="fu"><a href="https://rdrr.io/r/base/qr.html" class="external-link">qr.solve</a></span><span class="op">(</span><span class="va">Xw</span>, <span class="va">Yw</span><span class="op">)</span></span>
-<span><span class="va">lag_stats</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/apply.html" class="external-link">apply</a></span><span class="op">(</span><span class="va">innov_var</span>, <span class="fl">2</span>, <span class="kw">function</span><span class="op">(</span><span class="va">y</span><span class="op">)</span> <span class="op">{</span></span>
-<span>  <span class="va">ac</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/stats/acf.html" class="external-link">acf</a></span><span class="op">(</span><span class="va">y</span>, plot <span class="op">=</span> <span class="cn">FALSE</span>, lag.max <span class="op">=</span> <span class="fl">5</span><span class="op">)</span><span class="op">$</span><span class="va">acf</span><span class="op">[</span><span class="op">-</span><span class="fl">1</span><span class="op">]</span></span>
-<span>  <span class="fu"><a href="https://rdrr.io/r/base/mean.html" class="external-link">mean</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/MathFun.html" class="external-link">abs</a></span><span class="op">(</span><span class="va">ac</span><span class="op">)</span><span class="op">)</span></span>
-<span><span class="op">}</span><span class="op">)</span></span>
-<span><span class="fu"><a href="https://rdrr.io/r/base/mean.html" class="external-link">mean</a></span><span class="op">(</span><span class="va">lag_stats</span><span class="op">)</span></span>
-<span><span class="co"># [1] 0.08800862</span></span></code></pre></div>
-<p>For comparison, the same calculation on the pre-whitened residuals is
-typically much larger.</p>
-<p>In this simulation the mean absolute autocorrelation over lags 1–5
-drops by several fold after whitening; exact values vary with the random
-seed, but the whitened summary should be markedly smaller than the raw
-baseline.</p>
+<span><span class="va">ac_white</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/acorr_diagnostics.html">acorr_diagnostics</a></span><span class="op">(</span><span class="va">innov_var</span>, runs <span class="op">=</span> <span class="va">runs</span>, max_lag <span class="op">=</span> <span class="fl">20</span><span class="op">)</span></span>
+<span><span class="va">ac_raw</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/acorr_diagnostics.html">acorr_diagnostics</a></span><span class="op">(</span><span class="va">resid</span>, runs <span class="op">=</span> <span class="va">runs</span>, max_lag <span class="op">=</span> <span class="fl">20</span><span class="op">)</span></span>
+<span></span>
+<span><span class="co"># Mean absolute autocorrelation over lags 1-5, before and after whitening</span></span>
+<span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span>raw <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/mean.html" class="external-link">mean</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/MathFun.html" class="external-link">abs</a></span><span class="op">(</span><span class="va">ac_raw</span><span class="op">$</span><span class="va">acf</span><span class="op">[</span><span class="fl">1</span><span class="op">:</span><span class="fl">5</span><span class="op">]</span><span class="op">)</span><span class="op">)</span>, whitened <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/mean.html" class="external-link">mean</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/MathFun.html" class="external-link">abs</a></span><span class="op">(</span><span class="va">ac_white</span><span class="op">$</span><span class="va">acf</span><span class="op">[</span><span class="fl">1</span><span class="op">:</span><span class="fl">5</span><span class="op">]</span><span class="op">)</span><span class="op">)</span><span class="op">)</span></span>
+<span><span class="co">#         raw    whitened </span></span>
+<span><span class="co"># 0.110797487 0.005921328</span></span></code></pre></div>
+<p>The raw residuals carry strong low-lag autocorrelation; after
+whitening it is within the sampling noise band
+(<code>ac_white$ci</code>).</p>
 <div class="sourceCode" id="cb6"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="va">lag_stats_raw</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/apply.html" class="external-link">apply</a></span><span class="op">(</span><span class="va">resid</span>, <span class="fl">2</span>, <span class="kw">function</span><span class="op">(</span><span class="va">y</span><span class="op">)</span> <span class="op">{</span></span>
-<span>  <span class="va">ac</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/stats/acf.html" class="external-link">acf</a></span><span class="op">(</span><span class="va">y</span>, plot <span class="op">=</span> <span class="cn">FALSE</span>, lag.max <span class="op">=</span> <span class="fl">5</span><span class="op">)</span><span class="op">$</span><span class="va">acf</span><span class="op">[</span><span class="op">-</span><span class="fl">1</span><span class="op">]</span></span>
-<span>  <span class="fu"><a href="https://rdrr.io/r/base/mean.html" class="external-link">mean</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/MathFun.html" class="external-link">abs</a></span><span class="op">(</span><span class="va">ac</span><span class="op">)</span><span class="op">)</span></span>
-<span><span class="op">}</span><span class="op">)</span></span>
-<span><span class="fu"><a href="https://rdrr.io/r/base/mean.html" class="external-link">mean</a></span><span class="op">(</span><span class="va">lag_stats_raw</span><span class="op">)</span></span>
-<span><span class="co"># [1] 0.140151</span></span></code></pre></div>
-<div class="sourceCode" id="cb7"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="va">avg_acf</span> <span class="op">&lt;-</span> <span class="kw">function</span><span class="op">(</span><span class="va">mat</span>, <span class="va">lag.max</span> <span class="op">=</span> <span class="fl">20</span><span class="op">)</span> <span class="op">{</span></span>
-<span>  <span class="va">acf_vals</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/lapply.html" class="external-link">sapply</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/seq.html" class="external-link">seq_len</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/nrow.html" class="external-link">ncol</a></span><span class="op">(</span><span class="va">mat</span><span class="op">)</span><span class="op">)</span>, <span class="kw">function</span><span class="op">(</span><span class="va">j</span><span class="op">)</span> <span class="op">{</span></span>
-<span>    <span class="fu">stats</span><span class="fu">::</span><span class="fu"><a href="https://rdrr.io/r/stats/acf.html" class="external-link">acf</a></span><span class="op">(</span><span class="va">mat</span><span class="op">[</span>, <span class="va">j</span><span class="op">]</span>, plot <span class="op">=</span> <span class="cn">FALSE</span>, lag.max <span class="op">=</span> <span class="va">lag.max</span><span class="op">)</span><span class="op">$</span><span class="va">acf</span></span>
-<span>  <span class="op">}</span><span class="op">)</span></span>
-<span>  <span class="fu"><a href="https://rdrr.io/r/base/colSums.html" class="external-link">rowMeans</a></span><span class="op">(</span><span class="va">acf_vals</span><span class="op">)</span></span>
-<span><span class="op">}</span></span>
-<span></span>
-<span><span class="va">lag_max</span> <span class="op">&lt;-</span> <span class="fl">20</span></span>
-<span><span class="va">lags</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/seq.html" class="external-link">seq_len</a></span><span class="op">(</span><span class="va">lag_max</span><span class="op">)</span></span>
-<span><span class="va">acf_raw</span> <span class="op">&lt;-</span> <span class="fu">avg_acf</span><span class="op">(</span><span class="va">resid</span>, lag.max <span class="op">=</span> <span class="va">lag_max</span><span class="op">)</span></span>
-<span><span class="va">acf_white</span> <span class="op">&lt;-</span> <span class="fu">avg_acf</span><span class="op">(</span><span class="va">innov_var</span>, lag.max <span class="op">=</span> <span class="va">lag_max</span><span class="op">)</span></span>
-<span></span>
-<span><span class="va">ylim</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/range.html" class="external-link">range</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="va">acf_raw</span><span class="op">[</span><span class="op">-</span><span class="fl">1L</span><span class="op">]</span>, <span class="va">acf_white</span><span class="op">[</span><span class="op">-</span><span class="fl">1L</span><span class="op">]</span>, <span class="fl">0</span><span class="op">)</span><span class="op">)</span></span>
-<span><span class="fu"><a href="https://rdrr.io/r/graphics/plot.default.html" class="external-link">plot</a></span><span class="op">(</span><span class="va">lags</span>, <span class="va">acf_raw</span><span class="op">[</span><span class="op">-</span><span class="fl">1L</span><span class="op">]</span>, type <span class="op">=</span> <span class="st">"h"</span>, lwd <span class="op">=</span> <span class="fl">2</span>, col <span class="op">=</span> <span class="st">"#1b9e77"</span>,</span>
+<code class="sourceCode R"><span><span class="va">lags</span> <span class="op">&lt;-</span> <span class="va">ac_raw</span><span class="op">$</span><span class="va">lags</span></span>
+<span><span class="va">ylim</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/range.html" class="external-link">range</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="va">ac_raw</span><span class="op">$</span><span class="va">acf</span>, <span class="va">ac_white</span><span class="op">$</span><span class="va">acf</span>, <span class="fl">0</span><span class="op">)</span><span class="op">)</span></span>
+<span><span class="fu"><a href="https://rdrr.io/r/graphics/plot.default.html" class="external-link">plot</a></span><span class="op">(</span><span class="va">lags</span>, <span class="va">ac_raw</span><span class="op">$</span><span class="va">acf</span>, type <span class="op">=</span> <span class="st">"h"</span>, lwd <span class="op">=</span> <span class="fl">2</span>, col <span class="op">=</span> <span class="st">"#1b9e77"</span>,</span>
 <span>     ylim <span class="op">=</span> <span class="va">ylim</span>, xlab <span class="op">=</span> <span class="st">"Lag"</span>, ylab <span class="op">=</span> <span class="st">"Average autocorrelation"</span>,</span>
 <span>     main <span class="op">=</span> <span class="st">"Mean autocorrelation across voxels"</span><span class="op">)</span></span>
-<span><span class="fu"><a href="https://rdrr.io/r/graphics/lines.html" class="external-link">lines</a></span><span class="op">(</span><span class="va">lags</span>, <span class="va">acf_white</span><span class="op">[</span><span class="op">-</span><span class="fl">1L</span><span class="op">]</span>, type <span class="op">=</span> <span class="st">"h"</span>, lwd <span class="op">=</span> <span class="fl">2</span>, col <span class="op">=</span> <span class="st">"#d95f02"</span><span class="op">)</span></span>
-<span><span class="fu"><a href="https://rdrr.io/r/graphics/abline.html" class="external-link">abline</a></span><span class="op">(</span>h <span class="op">=</span> <span class="fl">0</span>, col <span class="op">=</span> <span class="st">"grey70"</span>, lty <span class="op">=</span> <span class="fl">2</span><span class="op">)</span></span>
+<span><span class="fu"><a href="https://rdrr.io/r/graphics/lines.html" class="external-link">lines</a></span><span class="op">(</span><span class="va">lags</span> <span class="op">+</span> <span class="fl">0.2</span>, <span class="va">ac_white</span><span class="op">$</span><span class="va">acf</span>, type <span class="op">=</span> <span class="st">"h"</span>, lwd <span class="op">=</span> <span class="fl">2</span>, col <span class="op">=</span> <span class="st">"#d95f02"</span><span class="op">)</span></span>
+<span><span class="fu"><a href="https://rdrr.io/r/graphics/abline.html" class="external-link">abline</a></span><span class="op">(</span>h <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="op">-</span><span class="fl">1</span>, <span class="fl">1</span><span class="op">)</span> <span class="op">*</span> <span class="va">ac_white</span><span class="op">$</span><span class="va">ci</span>, col <span class="op">=</span> <span class="st">"grey70"</span>, lty <span class="op">=</span> <span class="fl">2</span><span class="op">)</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/graphics/legend.html" class="external-link">legend</a></span><span class="op">(</span><span class="st">"topright"</span>,</span>
 <span>       legend <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"Raw residuals"</span>, <span class="st">"Whitened innovations"</span><span class="op">)</span>,</span>
 <span>       col <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"#1b9e77"</span>, <span class="st">"#d95f02"</span><span class="op">)</span>,</span>
@@ -243,22 +238,94 @@ Average autocorrelation across voxels before and after whitening
 </div>
 </div>
 <div class="section level2">
+<h2 id="censored-scrubbed-frames">Censored (scrubbed) frames<a class="anchor" aria-label="anchor" href="#censored-scrubbed-frames"></a>
+</h2>
+<p>Motion-corrupted frames can be passed as <code>censor</code>, either
+as 1-based indices or as a logical mask with one entry per timepoint.
+Censored frames are dropped when the noise model is estimated: no lag
+product spans a gap, and the mean is still removed per run. When
+whitening, the filter restarts (with the exact stationary start) at the
+first frame after each censored one.</p>
+<div class="sourceCode" id="cb7"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="va">scrub</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/rep.html" class="external-link">rep</a></span><span class="op">(</span><span class="cn">FALSE</span>, <span class="va">n_time</span><span class="op">)</span></span>
+<span><span class="va">scrub</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">50</span><span class="op">:</span><span class="fl">52</span>, <span class="fl">170</span><span class="op">)</span><span class="op">]</span> <span class="op">&lt;-</span> <span class="cn">TRUE</span></span>
+<span></span>
+<span><span class="va">plan_cens</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fit_noise.html">fit_noise</a></span><span class="op">(</span><span class="va">resid</span>, runs <span class="op">=</span> <span class="va">runs</span>, p <span class="op">=</span> <span class="st">"auto"</span>, censor <span class="op">=</span> <span class="va">scrub</span><span class="op">)</span></span>
+<span><span class="va">w_cens</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/whiten_apply.html">whiten_apply</a></span><span class="op">(</span><span class="va">plan_cens</span>, <span class="va">X</span>, <span class="va">Y</span>, runs <span class="op">=</span> <span class="va">runs</span><span class="op">)</span></span>
+<span><span class="va">w_cens</span><span class="op">$</span><span class="va">censor</span></span>
+<span><span class="co"># [1]  50  51  52 170</span></span></code></pre></div>
+<p><code><a href="../reference/whiten_apply.html">whiten_apply()</a></code> reuses the plan’s censor set when it is
+applied to data of the length it was fitted on, as here; pass
+<code>censor</code> explicitly for other data. The censored rows are
+still present in the output (filtered from the preceding history), and
+the result lists them in <code>censor</code> so they can be dropped
+before the final fit:</p>
+<div class="sourceCode" id="cb8"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="va">keep</span> <span class="op">&lt;-</span> <span class="op">-</span><span class="va">w_cens</span><span class="op">$</span><span class="va">censor</span></span>
+<span><span class="va">beta_cens</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/qr.html" class="external-link">qr.solve</a></span><span class="op">(</span><span class="va">w_cens</span><span class="op">$</span><span class="va">X</span><span class="op">[</span><span class="va">keep</span>, <span class="op">]</span>, <span class="va">w_cens</span><span class="op">$</span><span class="va">Y</span><span class="op">[</span><span class="va">keep</span>, <span class="fl">1</span><span class="op">:</span><span class="fl">5</span><span class="op">]</span><span class="op">)</span></span>
+<span><span class="fu"><a href="https://rdrr.io/r/base/Round.html" class="external-link">round</a></span><span class="op">(</span><span class="va">beta_cens</span>, <span class="fl">3</span><span class="op">)</span></span>
+<span><span class="co">#             [,1]  [,2]   [,3]  [,4]  [,5]</span></span>
+<span><span class="co"># intercept -0.174 0.039 -0.037 0.083 0.038</span></span>
+<span><span class="co"># task       1.636 1.423  1.151 1.436 1.540</span></span></code></pre></div>
+</div>
+<div class="section level2">
+<h2 id="correcting-residual-projection-bias">Correcting residual-projection bias<a class="anchor" aria-label="anchor" href="#correcting-residual-projection-bias"></a>
+</h2>
+<p>Autocorrelation estimated from GLM residuals is biased towards zero,
+because the residuals are <code>M y</code> for the residual-forming
+projection <code>M = I - X (X'X)^-1 X'</code>, and so carry
+<code>M Sigma M</code> rather than <code>Sigma</code>. The bias grows
+with the number of regressors, and slow drift regressors make it larger
+still. Our two-column design barely biases anything, so here we add the
+usual per-run intercepts and low-frequency (DCT) drift terms. Passing
+the design that produced the residuals undoes the bias:</p>
+<div class="sourceCode" id="cb9"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="va">dct</span> <span class="op">&lt;-</span> <span class="kw">function</span><span class="op">(</span><span class="va">L</span>, <span class="va">k</span><span class="op">)</span> <span class="fu"><a href="https://rdrr.io/r/base/lapply.html" class="external-link">sapply</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/seq.html" class="external-link">seq_len</a></span><span class="op">(</span><span class="va">k</span><span class="op">)</span>, <span class="kw">function</span><span class="op">(</span><span class="va">j</span><span class="op">)</span> <span class="fu"><a href="https://rdrr.io/r/base/Trig.html" class="external-link">cos</a></span><span class="op">(</span><span class="va">pi</span> <span class="op">*</span> <span class="va">j</span> <span class="op">*</span> <span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/seq.html" class="external-link">seq_len</a></span><span class="op">(</span><span class="va">L</span><span class="op">)</span> <span class="op">-</span> <span class="fl">0.5</span><span class="op">)</span> <span class="op">/</span> <span class="va">L</span><span class="op">)</span><span class="op">)</span></span>
+<span><span class="va">drift</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/cbind.html" class="external-link">rbind</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/cbind.html" class="external-link">cbind</a></span><span class="op">(</span><span class="fu">dct</span><span class="op">(</span><span class="fl">120</span>, <span class="fl">4</span><span class="op">)</span>, <span class="fu"><a href="https://rdrr.io/r/base/matrix.html" class="external-link">matrix</a></span><span class="op">(</span><span class="fl">0</span>, <span class="fl">120</span>, <span class="fl">4</span><span class="op">)</span><span class="op">)</span>,</span>
+<span>               <span class="fu"><a href="https://rdrr.io/r/base/cbind.html" class="external-link">cbind</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/matrix.html" class="external-link">matrix</a></span><span class="op">(</span><span class="fl">0</span>, <span class="fl">120</span>, <span class="fl">4</span><span class="op">)</span>, <span class="fu">dct</span><span class="op">(</span><span class="fl">120</span>, <span class="fl">4</span><span class="op">)</span><span class="op">)</span><span class="op">)</span></span>
+<span><span class="va">X_full</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/cbind.html" class="external-link">cbind</a></span><span class="op">(</span><span class="va">X</span>, run2 <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/numeric.html" class="external-link">as.numeric</a></span><span class="op">(</span><span class="va">runs</span> <span class="op">==</span> <span class="fl">2</span><span class="op">)</span>, <span class="va">drift</span><span class="op">)</span></span>
+<span><span class="va">resid_full</span> <span class="op">&lt;-</span> <span class="va">Y</span> <span class="op">-</span> <span class="va">X_full</span> <span class="op"><a href="https://rdrr.io/r/base/matmult.html" class="external-link">%*%</a></span> <span class="fu"><a href="https://rdrr.io/r/base/qr.html" class="external-link">qr.solve</a></span><span class="op">(</span><span class="va">X_full</span>, <span class="va">Y</span><span class="op">)</span></span>
+<span></span>
+<span><span class="va">plan_raw</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fit_noise.html">fit_noise</a></span><span class="op">(</span><span class="va">resid_full</span>, runs <span class="op">=</span> <span class="va">runs</span>, p <span class="op">=</span> <span class="fl">2</span><span class="op">)</span></span>
+<span><span class="va">plan_cor</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fit_noise.html">fit_noise</a></span><span class="op">(</span><span class="va">resid_full</span>, runs <span class="op">=</span> <span class="va">runs</span>, p <span class="op">=</span> <span class="fl">2</span>, design <span class="op">=</span> <span class="va">X_full</span><span class="op">)</span></span>
+<span><span class="fu"><a href="https://rdrr.io/r/base/Round.html" class="external-link">round</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/cbind.html" class="external-link">rbind</a></span><span class="op">(</span>uncorrected <span class="op">=</span> <span class="va">plan_raw</span><span class="op">$</span><span class="va">phi</span><span class="op">[[</span><span class="fl">1</span><span class="op">]</span><span class="op">]</span>,</span>
+<span>            corrected <span class="op">=</span> <span class="va">plan_cor</span><span class="op">$</span><span class="va">phi</span><span class="op">[[</span><span class="fl">1</span><span class="op">]</span><span class="op">]</span>,</span>
+<span>            truth <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/colSums.html" class="external-link">colMeans</a></span><span class="op">(</span><span class="va">phi_true</span><span class="op">)</span><span class="op">)</span>, <span class="fl">3</span><span class="op">)</span></span>
+<span><span class="co">#              [,1]   [,2]</span></span>
+<span><span class="co"># uncorrected 0.450 -0.226</span></span>
+<span><span class="co"># corrected   0.476 -0.203</span></span>
+<span><span class="co"># truth       0.499 -0.196</span></span></code></pre></div>
+<p>The correction works for every pooling mode with
+<code>method = "ar"</code>, including <code>pooling = "parcel"</code>,
+and with censoring. It requires residuals that really are OLS residuals
+from <code>design</code> (a numerical orthogonality check rejects
+obvious mismatches). When many datasets share one design, build the
+correction once with <code><a href="../reference/acvf_bias_matrix.html">acvf_bias_matrix()</a></code> and pass it as
+<code>acvf_correction</code>. <code>noise_acvf(resid, design = X)</code>
+returns the corrected autocovariance itself.</p>
+</div>
+<div class="section level2">
 <h2 id="parcel-pooling-and-multiscale-shrinkage">Parcel pooling and multiscale shrinkage<a class="anchor" aria-label="anchor" href="#parcel-pooling-and-multiscale-shrinkage"></a>
 </h2>
 <p>When per-voxel residuals are noisy, you can pool information across
 parcels. The example below constructs synthetic parcels and uses the
 multiscale PACF-weighted shrinkage.</p>
 <p>Under the hood, <code>fit_noise(..., pooling = "parcel")</code>
-builds parcel-level mean residual series at one or more spatial
-resolutions (fine/medium/coarse). Each parcel’s AR model is estimated
-with run-aware autocovariances, and then the coefficients are shrunk
-toward their parents by combining either partial autocorrelations
+estimates each parcel’s AR model from the autocovariances of its voxels,
+pooled across those voxels with run-aware, censor-aware lag products. It
+does not average the voxels into a parcel-mean series first: that
+series’ autocorrelation is dominated by whatever the voxels share and
+would not describe the voxel-level noise being whitened. With
+<code>parcel_sets</code>, this is done at each spatial resolution
+(fine/medium/coarse), and each fine parcel’s coefficients are then
+shrunk toward its parents by combining either partial autocorrelations
 (“pacf_weighted”) or autocovariance functions (“acvf_pooled”). The
-weights depend on parcel size, dispersion across voxels, and the number
-of runs, so larger or more homogeneous parcels lend more stability to
-their descendants while preserving stationarity for the final per-parcel
-filters.</p>
-<div class="sourceCode" id="cb8"><pre class="downlit sourceCode r">
+weights depend on parcel size, the relative dispersion of voxel
+variances (a unit-free measure, so rescaling the data does not change
+the result), and the number of runs. Larger or more homogeneous parcels
+therefore lend more stability to their descendants, and every final
+per-parcel filter is stationary.</p>
+<div class="sourceCode" id="cb10"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">parcels_fine</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/rep.html" class="external-link">rep</a></span><span class="op">(</span><span class="fl">1</span><span class="op">:</span><span class="fl">12</span>, each <span class="op">=</span> <span class="va">n_vox</span> <span class="op">/</span> <span class="fl">12</span><span class="op">)</span></span>
 <span><span class="va">parcels_medium</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/rep.html" class="external-link">rep</a></span><span class="op">(</span><span class="fl">1</span><span class="op">:</span><span class="fl">6</span>, each <span class="op">=</span> <span class="va">n_vox</span> <span class="op">/</span> <span class="fl">6</span><span class="op">)</span></span>
 <span><span class="va">parcels_coarse</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/rep.html" class="external-link">rep</a></span><span class="op">(</span><span class="fl">1</span><span class="op">:</span><span class="fl">3</span>, each <span class="op">=</span> <span class="va">n_vox</span> <span class="op">/</span> <span class="fl">3</span><span class="op">)</span></span>
@@ -286,14 +353,15 @@ filters.</p>
 <code>X_by</code>, a list of whitened design matrices per parcel, along
 with the voxel-wise <code>Y</code> innovations. Each
 <code>X_by[[pid]]</code> has the same dimensions as the original
-<code>X</code>.</p>
-<div class="sourceCode" id="cb9"><pre class="downlit sourceCode r">
+<code>X</code>; parcels that share a filter share one whitened
+design.</p>
+<div class="sourceCode" id="cb11"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">whitened_parcel</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/whiten_apply.html">whiten_apply</a></span><span class="op">(</span><span class="va">plan_parcel</span>, <span class="va">X</span>, <span class="va">Y</span>, runs <span class="op">=</span> <span class="va">runs</span>, parcels <span class="op">=</span> <span class="va">parcels_fine</span><span class="op">)</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/length.html" class="external-link">length</a></span><span class="op">(</span><span class="va">whitened_parcel</span><span class="op">$</span><span class="va">X_by</span><span class="op">)</span></span>
 <span><span class="co"># [1] 12</span></span></code></pre></div>
 <p>Parcel coefficients differ from one another, which is the point of
 parcel pooling: each parcel gets a filter matched to its own noise.</p>
-<div class="sourceCode" id="cb10"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb12"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="co"># Per-parcel AR coefficients, and confirmation that whitening changed the data</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/utils/head.html" class="external-link">head</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/lapply.html" class="external-link">sapply</a></span><span class="op">(</span><span class="va">plan_parcel</span><span class="op">$</span><span class="va">phi_by_parcel</span>, <span class="kw">function</span><span class="op">(</span><span class="va">p</span><span class="op">)</span> <span class="fu"><a href="https://rdrr.io/r/base/Round.html" class="external-link">round</a></span><span class="op">(</span><span class="va">p</span>, <span class="fl">3</span><span class="op">)</span><span class="op">)</span><span class="op">[</span>, <span class="fl">1</span><span class="op">:</span><span class="fl">4</span><span class="op">]</span><span class="op">)</span></span>
 <span><span class="co">#           1      2      3      4</span></span>
@@ -306,11 +374,15 @@ parcel pooling: each parcel gets a filter matched to its own noise.</p>
 <h2 id="fitting-arma-models">Fitting ARMA models<a class="anchor" aria-label="anchor" href="#fitting-arma-models"></a>
 </h2>
 <p>Some datasets require ARMA models to capture remaining MA structure.
-The workflow mirrors the AR case but sets <code>method = "arma"</code>
-and supplies orders <code>(p, q)</code>. Note: ARMA estimation uses a
-Hannan–Rissanen procedure on the run-mean residual series by default
-(fast and stable for planning), not voxel-wise ARMA fitting.</p>
-<div class="sourceCode" id="cb11"><pre class="downlit sourceCode r">
+The workflow mirrors the AR case but sets
+<code>method = "arma"</code>.</p>
+<p>ARMA models are estimated by the Hannan–Rissanen procedure, pooled
+over voxels: every voxel is treated as a replicate series sharing the
+coefficients, so the estimate reflects voxel-level noise rather than the
+voxel-mean series. All lags stay inside contiguous run/censor segments.
+<code>hr_iter</code> adds refinement iterations, and the plan’s
+<code>sigma2</code> is the voxel-scale innovation variance.</p>
+<div class="sourceCode" id="cb13"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">plan_arma</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fit_noise.html">fit_noise</a></span><span class="op">(</span></span>
 <span>  <span class="va">resid</span>,</span>
 <span>  runs <span class="op">=</span> <span class="va">runs</span>,</span>
@@ -323,9 +395,22 @@ Hannan–Rissanen procedure on the run-mean residual series by default
 <span><span class="va">plan_arma</span><span class="op">$</span><span class="va">order</span></span>
 <span><span class="co"># p q </span></span>
 <span><span class="co"># 2 1</span></span></code></pre></div>
+<p>Orders can be chosen automatically: <code>p = "auto"</code> and
+<code>q = "auto"</code> search <code>0:p_max</code> and
+<code>0:q_max</code> by BIC on the pooled regression. Because voxels
+that share fluctuations carry less independent evidence than their count
+suggests, the BIC sample size uses the effective number of independent
+voxels.</p>
+<div class="sourceCode" id="cb14"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="va">plan_arma_auto</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/fit_noise.html">fit_noise</a></span><span class="op">(</span><span class="va">resid</span>, runs <span class="op">=</span> <span class="va">runs</span>, method <span class="op">=</span> <span class="st">"arma"</span>,</span>
+<span>                            p <span class="op">=</span> <span class="st">"auto"</span>, q <span class="op">=</span> <span class="st">"auto"</span>, q_max <span class="op">=</span> <span class="fl">2</span><span class="op">)</span></span>
+<span><span class="va">plan_arma_auto</span><span class="op">$</span><span class="va">order</span></span>
+<span><span class="co"># p q </span></span>
+<span><span class="co"># 2 0</span></span></code></pre></div>
+<p>Here the noise is AR(2), and the search finds no MA component.</p>
 <p>ARMA whitening uses the same <code><a href="../reference/whiten_apply.html">whiten_apply()</a></code>
 interface.</p>
-<div class="sourceCode" id="cb12"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb15"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">whitened_arma</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/whiten_apply.html">whiten_apply</a></span><span class="op">(</span><span class="va">plan_arma</span>, <span class="va">X</span>, <span class="va">Y</span>, runs <span class="op">=</span> <span class="va">runs</span><span class="op">)</span></span>
 <span><span class="co"># The task regressor is 0 for the first 30 TRs in this simulation,</span></span>
 <span><span class="co"># so showing the first 5 rows hides the effect on that column.</span></span>
@@ -342,7 +427,7 @@ interface.</p>
 <span><span class="co">#  [7,] 0.7261956 0.7248784</span></span>
 <span><span class="co">#  [8,] 0.7261956 0.7260905</span></span>
 <span><span class="co">#  [9,] 0.7261956 0.7261872</span></span></code></pre></div>
-<div class="sourceCode" id="cb13"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb16"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="co"># Visualize how whitening transforms the task step regressor around its first onset</span></span>
 <span><span class="va">task_raw</span> <span class="op">&lt;-</span> <span class="va">X</span><span class="op">[</span>, <span class="st">"task"</span><span class="op">]</span></span>
 <span><span class="va">task_white</span> <span class="op">&lt;-</span> <span class="va">whitened_arma</span><span class="op">$</span><span class="va">X</span><span class="op">[</span>, <span class="st">"task"</span><span class="op">]</span></span>
@@ -379,8 +464,8 @@ MA(1) refinement) and can operate globally or per parcel. Because the
 interface mirrors AFNI’s internals, it is a convenient bridge when
 comparing pipelines or validating fmriAR against established AFNI
 analyses.</p>
-<div class="sourceCode" id="cb14"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="co"># Example: AFNI-style AR(3) with optional MA(1) term</span></span>
+<div class="sourceCode" id="cb17"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="co"># AFNI-style AR(3): a real root and one complex pair (radius r1, angle t1)</span></span>
 <span><span class="va">roots</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>a <span class="op">=</span> <span class="fl">0.6</span>, r1 <span class="op">=</span> <span class="fl">0.7</span>, t1 <span class="op">=</span> <span class="va">pi</span> <span class="op">/</span> <span class="fl">6</span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">plan_afni</span> <span class="op">&lt;-</span> <span class="va">compat</span><span class="op">$</span><span class="fu">afni_restricted_plan</span><span class="op">(</span></span>
@@ -393,41 +478,57 @@ analyses.</p>
 <span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">plan_afni</span><span class="op">$</span><span class="va">order</span></span>
+<span><span class="co"># p q </span></span>
+<span><span class="co"># 3 1</span></span>
 <span></span>
 <span><span class="co"># Apply whitening just like any other plan</span></span>
 <span><span class="va">whitened_afni</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/whiten_apply.html">whiten_apply</a></span><span class="op">(</span><span class="va">plan_afni</span>, <span class="va">X</span>, <span class="va">Y</span>, runs <span class="op">=</span> <span class="va">runs</span><span class="op">)</span></span></code></pre></div>
-<p>Tip: set <code>estimate_ma1 = FALSE</code> to obtain the pure AR
-filter implied by the AFNI roots, or provide a list of root
-specifications keyed by parcel ID to drive parcel-specific filters that
-mirror AFNI’s voxel grouping.</p>
+<p>As in AFNI, <code>a</code>, <code>r1</code> and <code>r2</code> must
+be non-negative (values above 0.95 are clamped) and angles are clamped
+to <code>[0, pi]</code>. AFNI models additive white noise through
+<code>vrt = s^2 / (s^2 + w^2)</code>, the share of variance carried by
+the AR signal. With <code>estimate_ma1 = FALSE</code>, a
+<code>vrt</code> below 1 produces the exact ARMA(p, p) equivalent of
+AR(p) plus white noise, whose autocorrelation is <code>vrt</code> times
+the AR autocorrelation at every non-zero lag. With
+<code>estimate_ma1 = TRUE</code>, an MA(1) term is instead estimated
+from the AR-filtered voxels, and <code>vrt</code> is ignored.</p>
+<div class="sourceCode" id="cb18"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="va">plan_afni_vrt</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/afni_restricted_plan.html">afni_restricted_plan</a></span><span class="op">(</span><span class="va">resid</span>, runs <span class="op">=</span> <span class="va">runs</span>, p <span class="op">=</span> <span class="fl">3L</span>,</span>
+<span>                                      roots <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="va">roots</span>, vrt <span class="op">=</span> <span class="fl">0.8</span><span class="op">)</span>,</span>
+<span>                                      estimate_ma1 <span class="op">=</span> <span class="cn">FALSE</span><span class="op">)</span></span>
+<span><span class="va">plan_afni_vrt</span><span class="op">$</span><span class="va">order</span></span>
+<span><span class="co"># p q </span></span>
+<span><span class="co"># 3 3</span></span></code></pre></div>
+<p>Set <code>estimate_ma1 = FALSE</code> and leave <code>vrt</code> at 1
+to obtain the pure AR filter implied by the AFNI roots, or provide a
+list of root specifications keyed by parcel ID to drive parcel-specific
+filters that mirror AFNI’s voxel grouping.</p>
 </div>
 <div class="section level2">
 <h2 id="diagnostics-and-sandwich-estimates">Diagnostics and sandwich estimates<a class="anchor" aria-label="anchor" href="#diagnostics-and-sandwich-estimates"></a>
 </h2>
 <p>The package includes helpers for quick diagnostics and variance
 estimation:</p>
-<div class="sourceCode" id="cb15"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="co"># Autocorrelation diagnostics for whitened residuals (innovations)</span></span>
-<span><span class="va">acorr</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/acorr_diagnostics.html">acorr_diagnostics</a></span><span class="op">(</span><span class="va">innov_var</span><span class="op">[</span>, <span class="fl">1</span><span class="op">:</span><span class="fl">3</span><span class="op">]</span><span class="op">)</span></span>
-<span><span class="va">acorr</span></span>
-<span><span class="co"># $lags</span></span>
-<span><span class="co">#  [1]  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20</span></span>
-<span><span class="co"># </span></span>
-<span><span class="co"># $acf</span></span>
-<span><span class="co">#  [1]  0.086366152 -0.184348043 -0.126474616  0.019232135  0.076929737</span></span>
-<span><span class="co">#  [6] -0.042835707 -0.051502911 -0.033071925  0.001679686  0.040923025</span></span>
-<span><span class="co"># [11] -0.018922875 -0.067011974 -0.003973070  0.030490781 -0.044427665</span></span>
-<span><span class="co"># [16] -0.019602767  0.001304122  0.023997543  0.023107560 -0.002491034</span></span>
-<span><span class="co"># </span></span>
-<span><span class="co"># $ci</span></span>
-<span><span class="co"># [1] 0.1265175</span></span>
+<div class="sourceCode" id="cb19"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="co"># Autocorrelation diagnostics for whitened residuals (innovations), per run</span></span>
+<span><span class="va">acorr</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/acorr_diagnostics.html">acorr_diagnostics</a></span><span class="op">(</span><span class="va">innov_var</span><span class="op">[</span>, <span class="fl">1</span><span class="op">:</span><span class="fl">3</span><span class="op">]</span>, runs <span class="op">=</span> <span class="va">runs</span>, max_lag <span class="op">=</span> <span class="fl">5</span><span class="op">)</span></span>
+<span><span class="fu"><a href="https://rdrr.io/r/base/Round.html" class="external-link">round</a></span><span class="op">(</span><span class="va">acorr</span><span class="op">$</span><span class="va">acf</span>, <span class="fl">3</span><span class="op">)</span></span>
+<span><span class="co"># [1]  0.005 -0.023 -0.031  0.023  0.043</span></span>
 <span></span>
-<span><span class="co"># Sandwich standard errors from whitened residuals</span></span>
-<span><span class="va">sandwich</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/sandwich_from_whitened_resid.html">sandwich_from_whitened_resid</a></span><span class="op">(</span><span class="va">whitened</span><span class="op">$</span><span class="va">X</span>, <span class="va">whitened</span><span class="op">$</span><span class="va">Y</span><span class="op">[</span>, <span class="fl">1</span><span class="op">:</span><span class="fl">3</span><span class="op">]</span><span class="op">)</span></span>
-<span><span class="va">sandwich</span><span class="op">$</span><span class="va">se</span></span>
-<span><span class="co">#           [,1]      [,2]      [,3]</span></span>
-<span><span class="co"># [1,] 0.1425762 0.1563702 0.1439597</span></span>
-<span><span class="co"># [2,] 0.1961639 0.2151425 0.1980675</span></span></code></pre></div>
+<span><span class="co"># Standard errors from the whitened fit. "iid" assumes the whitening worked;</span></span>
+<span><span class="co"># "hac" (Newey-West within runs) stays valid if some autocorrelation remains.</span></span>
+<span><span class="va">se_iid</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/sandwich_from_whitened_resid.html">sandwich_from_whitened_resid</a></span><span class="op">(</span><span class="va">whitened</span><span class="op">$</span><span class="va">X</span>, <span class="va">whitened</span><span class="op">$</span><span class="va">Y</span><span class="op">[</span>, <span class="fl">1</span><span class="op">:</span><span class="fl">3</span><span class="op">]</span><span class="op">)</span></span>
+<span><span class="va">se_hac</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/sandwich_from_whitened_resid.html">sandwich_from_whitened_resid</a></span><span class="op">(</span><span class="va">whitened</span><span class="op">$</span><span class="va">X</span>, <span class="va">whitened</span><span class="op">$</span><span class="va">Y</span><span class="op">[</span>, <span class="fl">1</span><span class="op">:</span><span class="fl">3</span><span class="op">]</span>,</span>
+<span>                                       type <span class="op">=</span> <span class="st">"hac"</span>, runs <span class="op">=</span> <span class="va">runs</span><span class="op">)</span></span>
+<span><span class="co"># Rows of $se follow the columns of X; row 2 is the task effect</span></span>
+<span><span class="fu"><a href="https://rdrr.io/r/base/cbind.html" class="external-link">rbind</a></span><span class="op">(</span>iid <span class="op">=</span> <span class="va">se_iid</span><span class="op">$</span><span class="va">se</span><span class="op">[</span><span class="fl">2</span>, <span class="op">]</span>, hac <span class="op">=</span> <span class="va">se_hac</span><span class="op">$</span><span class="va">se</span><span class="op">[</span><span class="fl">2</span>, <span class="op">]</span><span class="op">)</span></span>
+<span><span class="co">#          [,1]      [,2]      [,3]</span></span>
+<span><span class="co"># iid 0.1628794 0.1838375 0.1711692</span></span>
+<span><span class="co"># hac 0.1424682 0.1837681 0.1684552</span></span></code></pre></div>
+<p><code><a href="../reference/sandwich_from_whitened_resid.html">sandwich_from_whitened_resid()</a></code> also accepts
+rank-deficient designs: non-estimable coefficients get <code>NA</code>
+standard errors, as in <code><a href="https://rdrr.io/r/stats/lm.html" class="external-link">lm()</a></code>.</p>
 </div>
 <div class="section level2">
 <h2 id="next-steps">Next steps<a class="anchor" aria-label="anchor" href="#next-steps"></a>
@@ -443,8 +544,9 @@ coefficients.</li>
 build end-to-end prewhitened analyses.</li>
 </ul>
 <p>For production usage, consider benchmarking with your acquisition
-parameters and reviewing the package README for tuning options such as
-thread control and censor handling.</p>
+parameters. <code>tools/validation/accuracy_benchmark.R</code> in the
+source repository runs seeded accuracy, calibration and timing scenarios
+against any installed version of the package.</p>
 </div>
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>
     </nav></aside>
