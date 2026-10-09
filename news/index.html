@@ -7,7 +7,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">fmriAR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.3.3</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.4.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -36,6 +36,57 @@
       <small>Source: <a href="https://github.com/bbuchsbaum/fmriAR/blob/main/NEWS.md" class="external-link"><code>NEWS.md</code></a></small>
     </div>
 
+    <div class="section level2">
+<h2 class="pkg-version" data-toc-text="0.4.0" id="fmriar-040">fmriAR 0.4.0<a class="anchor" aria-label="anchor" href="#fmriar-040"></a></h2>
+<p>Validated with <code>tools/validation/accuracy_benchmark.R</code>, which runs the same seeded scenarios against two installed versions; numbers below are 0.3.3 -&gt; this version.</p>
+<div class="section level3">
+<h3 id="breaking-changes-0-4-0">Breaking changes<a class="anchor" aria-label="anchor" href="#breaking-changes-0-4-0"></a></h3>
+<ul><li>
+<code>whiten_apply(inplace =)</code> is deprecated and ignored, with a warning. The inputs were never modified (R’s copy-on-modify semantics prevent doing so safely), so the argument only made the result invisible.</li>
+<li>
+<code>fit_noise(method = "arma", p = "auto")</code> now chooses the AR order by BIC from <code>0:p_max</code> instead of always fitting AR order 2 (see below).</li>
+<li>Results change where the fixes below say so: exact start-up for AR(p)/ARMA, pooled ARMA estimation, per-voxel <code><a href="../reference/acorr_diagnostics.html">acorr_diagnostics()</a></code>, the BIC penalty, and <code>compat$whiten_with_phi(exact_first = TRUE)</code>.</li>
+</ul></div>
+<div class="section level3">
+<h3 id="fixes-0-4-0">Fixes<a class="anchor" aria-label="anchor" href="#fixes-0-4-0"></a></h3>
+<ul><li>An explicit <code>p</code> larger than <code>p_max</code> is now honoured; <code>fit_noise(p = 8)</code> returned an AR(6) because the order was capped at the default <code>p_max = 6</code>.</li>
+<li>Automatic order selection used <code>2 n log(sigma2) + k log(n)</code>, half the standard BIC penalty. For a single-voxel AR(1) it chose p &gt; 1 17% of the time, now 3% (power to detect a true AR(2) with phi = (0.5, 0.25) at n = 200 goes from 97% to 89%, the expected price of the correct penalty).</li>
+<li>
+<code><a href="../reference/whiten_apply.html">whiten_apply()</a></code> accepts a logical <code>censor</code> mask. It was passed through <code><a href="https://rdrr.io/r/base/integer.html" class="external-link">as.integer()</a></code>, censoring only timepoint 1, which also broke <code><a href="../reference/whiten.html">whiten()</a></code>.</li>
+<li>
+<code><a href="../reference/whiten_apply.html">whiten_apply()</a></code> uses the plan’s <code>censor</code> set when none is given and the data have the length the plan was fitted on (plans now record <code>n_time</code>), mirroring the existing <code>runs</code> fallback.</li>
+<li>
+<code><a href="../reference/whiten_apply.html">whiten_apply()</a></code> errors when a per-run plan is applied to data with a different number of runs instead of silently pairing runs with the wrong coefficients. When censoring is active the result carries <code>censor</code>, the rows to drop before fitting.</li>
+<li>
+<code>enforce_invertible_ma()</code> moved roots inside the unit circle by reflection, which leaves a unit root where it is (<code>theta = -1</code> stayed <code>-1</code>). Roots are now kept at modulus &gt;= 1/0.99, mirroring the AR PACF bound.</li>
+<li>
+<code><a href="../reference/sandwich_from_whitened_resid.html">sandwich_from_whitened_resid()</a></code> no longer fails on rank-deficient designs; non-estimable coefficients get <code>NA</code> standard errors, as in <code><a href="https://rdrr.io/r/stats/lm.html" class="external-link">lm()</a></code>.</li>
+<li>Multiscale parcel weights depended on the units of the data (the dispersion term was a raw variance). They are now unit-free.</li>
+<li>Multiscale <code>acvf_pooled</code> with <code>p = "auto"</code> fitted every parcel at <code>p_max</code>; it now uses the largest order selected at any scale (mean fitted order in the benchmark 6 -&gt; 1.4 for a true AR(1), with unchanged accuracy).</li>
+<li>
+<code>acorr_diagnostics(aggregate = "mean"/"median")</code> aggregates per-voxel autocorrelations. It used the autocorrelation of the voxel-mean series, which measures shared signal and reported 0.86 lag-1 autocorrelation for voxels whose own was 0.25.</li>
+<li>
+<code>compat$update_plan()</code> keeps the previous plan’s <code>censor</code> and <code>exact_first</code>; <code>compat$whiten_with_phi()</code> now defaults to <code>exact_first = TRUE</code>, matching <code>plan_from_phi()</code>.</li>
+<li>The parallel-determinism test passed its input matrices to the in-place kernel, so all outputs aliased one buffer and the test compared it to itself.</li>
+</ul></div>
+<div class="section level3">
+<h3 id="algorithms-0-4-0">Algorithms<a class="anchor" aria-label="anchor" href="#algorithms-0-4-0"></a></h3>
+<ul><li>Exact stationary start-up for any AR(p)/ARMA(p,q) (Ansley’s banded Cholesky). <code>exact_first = "ar1"</code> previously rescaled only AR(1) starts; for AR(2) (1.2, -0.5) the first two whitened samples of every run or censor segment had variance 3.73 and 1.93, now 1.01 and 1.01. Whitening now equals dense-Cholesky GLS within each segment to ~1e-14; AR(1) output is unchanged. GLS slope variance in short runs: AR(2) 4x60 runs 50.3 -&gt; 48.5, ARMA(1,1) 6x40 runs 43.1 -&gt; 39.5 (x1e-3); type-I rates stay nominal.</li>
+<li>ARMA is estimated by a Hannan-Rissanen regression pooled over voxels and confined to contiguous segments, instead of on the voxel-mean series with censoring gaps spliced together. ARMA(1,1) RMSE (phi/theta) 0.079/0.088 -&gt; 0.014/0.014; with 20% censoring 0.112/0.165 -&gt; 0.035/0.040; mean residual autocorrelation after whitening drops by 22-56% across scenarios. The censoring warning is gone, and the plan’s <code>sigma2</code> is now reported for ARMA at voxel scale. <code>afni_restricted_plan(estimate_ma1 = TRUE)</code> uses the same pooled estimator.</li>
+<li>Global AR pooling fits Yule-Walker on the frame-weighted average of the runs’ autocorrelations rather than averaging per-run coefficients (identical for AR(1); slightly better for AR(p)).</li>
+<li>ARMA orders can be selected automatically: <code>q = "auto"</code> (new <code>q_max</code>, default 2) and <code>p = "auto"</code> search the order grid by BIC on the pooled Hannan-Rissanen regression. All candidates are column subsets of one regression, so selection costs one extra pass over the data. The BIC sample size is frames times the effective number of independent voxels (Kish design effect from the mean inter-voxel correlation): counting frames alone under-fitted shared slow noise, counting every voxel over-fitted when voxels share fluctuations. Order recovery: 100% for white noise and AR(1), 80% for ARMA(1,1) (30 voxels x 240 frames).</li>
+<li>ARMA(1,1) noise plus a shared slow AR(0.95) component is not an ARMA(1,1) process, and the single shared realisation keeps even the empirical voxel autocorrelation ~0.14 from the theoretical one, so no estimator can recover “the” (1,1) parameters there. What can be fixed is how white the voxels end up. Residual autocorrelation after whitening: 0.135 in 0.3.3, 0.061 with a fixed (1,1) fit now, 0.055 with automatic orders, against 0.052 for a correctly specified model.</li>
+<li>Single-series Hannan-Rissanen skips the long-AR burn-in.</li>
+<li>
+<code>sandwich_from_whitened_resid(type = "hac")</code>: Newey-West standard errors within runs, for when the noise model leaves autocorrelation behind.</li>
+</ul></div>
+<div class="section level3">
+<h3 id="performance-0-4-0">Performance<a class="anchor" aria-label="anchor" href="#performance-0-4-0"></a></h3>
+<ul><li>OpenMP is now actually compiled (<code>SHLIB_OPENMP_CXXFLAGS</code>); thread count honours <code>options(fmriAR.max_threads)</code>. R API calls were moved out of the parallel region, where an interrupt would have terminated R.</li>
+<li>Segment-aware lag sums and the Hannan-Rissanen normal equations run in C++. At 400 x 20000: <code>fit_noise(p = "auto")</code> 1.07 s -&gt; 0.29 s, HC0 sandwich 1.07 s -&gt; 0.30 s (vectorised, identical results). Pooled ARMA estimation does strictly more work than the old single-series fit (0.47 s -&gt; 0.93 s).</li>
+<li>Parcel plans whiten the design once per distinct filter.</li>
+</ul></div>
+</div>
     <div class="section level2">
 <h2 class="pkg-version" data-toc-text="0.3.3" id="fmriar-033">fmriAR 0.3.3<a class="anchor" aria-label="anchor" href="#fmriar-033"></a></h2>
 <div class="section level3">

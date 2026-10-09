@@ -7,7 +7,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">fmriAR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.3.3</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.4.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -53,6 +53,7 @@
 <span>  p <span class="op">=</span> <span class="st">"auto"</span>,</span>
 <span>  q <span class="op">=</span> <span class="fl">0L</span>,</span>
 <span>  p_max <span class="op">=</span> <span class="fl">6L</span>,</span>
+<span>  q_max <span class="op">=</span> <span class="fl">2L</span>,</span>
 <span>  exact_first <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"ar1"</span>, <span class="st">"none"</span><span class="op">)</span>,</span>
 <span>  pooling <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"global"</span>, <span class="st">"run"</span>, <span class="st">"parcel"</span><span class="op">)</span>,</span>
 <span>  parcels <span class="op">=</span> <span class="cn">NULL</span>,</span>
@@ -100,23 +101,39 @@ when computing autocorrelations. Each run's estimation uses only its own valid
 
 
 <dt id="arg-method">method<a class="anchor" aria-label="anchor" href="#arg-method"></a></dt>
-<dd><p>Either "ar" or "arma".</p></dd>
+<dd><p>Either "ar" or "arma". ARMA models are estimated by a
+Hannan–Rissanen regression pooled over voxels (every voxel is treated as a
+replicate series sharing the coefficients), with all lags kept inside
+contiguous run/censor segments.</p></dd>
 
 
 <dt id="arg-p">p<a class="anchor" aria-label="anchor" href="#arg-p"></a></dt>
-<dd><p>AR order (integer or "auto" if method == "ar").</p></dd>
+<dd><p>AR order (integer or "auto" if method == "ar"). An explicit order
+is honoured even when it exceeds <code>p_max</code>.</p></dd>
 
 
 <dt id="arg-q">q<a class="anchor" aria-label="anchor" href="#arg-q"></a></dt>
-<dd><p>MA order (integer).</p></dd>
+<dd><p>MA order (integer), or <code>"auto"</code> (ARMA only) to choose it by BIC
+from <code>0:q_max</code>.</p></dd>
 
 
 <dt id="arg-p-max">p_max<a class="anchor" aria-label="anchor" href="#arg-p-max"></a></dt>
-<dd><p>Maximum AR order when <code>p = "auto"</code>.</p></dd>
+<dd><p>Maximum AR order when <code>p = "auto"</code>. For <code>method = "arma"</code>,
+<code>p = "auto"</code> searches <code>0:p_max</code> jointly with the MA order by BIC on the
+pooled Hannan–Rissanen regression.</p></dd>
+
+
+<dt id="arg-q-max">q_max<a class="anchor" aria-label="anchor" href="#arg-q-max"></a></dt>
+<dd><p>Maximum MA order when <code>q = "auto"</code>.</p></dd>
 
 
 <dt id="arg-exact-first">exact_first<a class="anchor" aria-label="anchor" href="#arg-exact-first"></a></dt>
-<dd><p>Apply exact AR(1) scaling at segment starts ("ar1" or "none").</p></dd>
+<dd><p>How <code><a href="whiten_apply.html">whiten_apply()</a></code> treats the start of each run or
+post-censoring segment. <code>"ar1"</code> (default; the name is historical) applies
+the exact stationary initialisation of the fitted AR/ARMA model, i.e. exact
+GLS whitening within each segment; for AR(1) this is the familiar
+<code>sqrt(1 - phi^2)</code> scaling of the first sample. <code>"none"</code> uses the
+conditional filter with a zero pre-sample.</p></dd>
 
 
 <dt id="arg-pooling">pooling<a class="anchor" aria-label="anchor" href="#arg-pooling"></a></dt>
@@ -200,15 +217,16 @@ is governed by <code>p_max</code> and the run length rather than by <code>p</cod
 <code>fit_noise(p = 1, p_max = 6)</code> returns seven values, not two. Under
 global pooling every run is truncated to the shortest available length
 before averaging, since a zero-padded autocovariance is not a valid
-covariance.</p></li>
-<li><p><code>sigma2</code>: list of innovation variances, matching <code>gamma</code>, derived
-as <code>gamma_0 - sum_k phi_k gamma_k</code> from the coefficients stored on the
-plan so the two are always mutually consistent. <code>NA</code> for
-<code>method = "arma"</code>, where no comparably cheap voxel-scale innovation
-variance is available, and <code>NA</code> whenever <code>gamma</code> does not reach lag
+covariance. Global AR coefficients are fitted by Yule–Walker on the
+frame-weighted average of the runs' autocorrelations.</p></li>
+<li><p><code>sigma2</code>: list of innovation variances, matching <code>gamma</code>. For
+<code>method = "ar"</code> it is derived as <code>gamma_0 - sum_k phi_k gamma_k</code> from
+the coefficients stored on the plan so the two are always mutually
+consistent, and is <code>NA</code> whenever <code>gamma</code> does not reach lag
 <code>length(phi)</code> – heavy censoring can truncate it that far, and a
 partial sum would overstate the innovation variance rather than
-report that it is unavailable.</p></li>
+report that it is unavailable. For <code>method = "arma"</code> it is the mean
+squared exact-whitened residual over all voxels and valid frames.</p></li>
 <li><p><code>gamma_by_parcel</code>, <code>sigma2_by_parcel</code>: the same quantities per
 parcel when <code>pooling = "parcel"</code>, keyed like <code>phi_by_parcel</code>.</p></li>
 </ul><p>For a run-stationary noise process with autocovariance <code>gamma</code>, the

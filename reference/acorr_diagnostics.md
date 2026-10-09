@@ -30,7 +30,8 @@ acorr_diagnostics(
 
 - aggregate:
 
-  Aggregation across voxels: "mean", "median", or "none".
+  How per-voxel autocorrelations are combined: "mean", "median" (across
+  voxels, lag by lag), or "none" (lags x voxels matrix).
 
 ## Value
 

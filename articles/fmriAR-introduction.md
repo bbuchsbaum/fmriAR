@@ -85,13 +85,13 @@ plan_ar <- fit_noise(
 plan_ar
 # fmriAR whitening plan
 #   Method: AR
-#   Orders: p = 2, q = 0
+#   Orders: p = 1, q = 0
 #   Pooling: run
 #   Runs: 2 (1, 2)
-#   Exact first-sample scaling: AR(1)
+#   Segment start: exact stationary
 #   Coefficients:
-#     1: phi = 0.485, -0.193
-#     2: phi = 0.482, -0.196
+#     1: phi = 0.407
+#     2: phi = 0.403
 ```
 
 The returned `fmriAR_plan` holds run-specific AR coefficients and
@@ -108,11 +108,11 @@ versions that can be used in GLS estimation or downstream analyses.
 whitened <- whiten_apply(plan_ar, X, Y, runs = runs)
 str(whitened)
 # List of 2
-#  $ X: num [1:240, 1:2] 1 0.515 0.708 0.708 0.708 ...
+#  $ X: num [1:240, 1:2] 0.914 0.593 0.593 0.593 0.593 ...
 #   ..- attr(*, "dimnames")=List of 2
 #   .. ..$ : NULL
 #   .. ..$ : chr [1:2] "intercept" "task"
-#  $ Y: num [1:240, 1:60] -1.4936 -1.5949 -0.0306 -1.0101 -0.0617 ...
+#  $ Y: num [1:240, 1:60] -1.3645 -1.7121 0.0755 -0.6306 0.0286 ...
 ```
 
 By default the function returns whitened `X` and `Y`. You can compute
@@ -124,9 +124,9 @@ Xw <- whitened$X
 Yw <- whitened$Y
 beta_gls <- qr.solve(Xw, Yw[, 1:5])
 beta_gls
-#                 [,1]       [,2]        [,3]       [,4]       [,5]
-# intercept -0.1785576 0.03768029 -0.04137929 0.08983252 0.03839622
-# task       1.6659992 1.38144408  1.18152789 1.45707478 1.53914426
+#                 [,1]       [,2]        [,3]      [,4]       [,5]
+# intercept -0.1993785 0.02265309 -0.01111047 0.0902481 0.05321269
+# task       1.6996789 1.40018444  1.12676373 1.4552355 1.51189501
 ```
 
 ## Inspecting innovations
@@ -143,7 +143,7 @@ lag_stats <- apply(innov_var, 2, function(y) {
   mean(abs(ac))
 })
 mean(lag_stats)
-# [1] 0.05721336
+# [1] 0.08800862
 ```
 
 For comparison, the same calculation on the pre-whitened residuals is
@@ -235,7 +235,7 @@ plan_parcel <- fit_noise(
 
 plan_parcel$order
 # p q 
-# 4 0
+# 2 0
 ```
 
 When parcel pooling is requested,
@@ -259,12 +259,10 @@ parcel pooling: each parcel gets a filter matched to its own noise.
 # Per-parcel AR coefficients, and confirmation that whitening changed the data
 head(sapply(plan_parcel$phi_by_parcel, function(p) round(p, 3))[, 1:4])
 #           1      2      3      4
-# [1,]  0.472  0.472  0.485  0.471
-# [2,] -0.103 -0.114 -0.161 -0.166
-# [3,] -0.136 -0.108 -0.058 -0.057
-# [4,]  0.041  0.042  0.000  0.000
+# [1,]  0.474  0.472  0.496  0.483
+# [2,] -0.134 -0.136 -0.190 -0.193
 max(abs(whitened_parcel$Y - Y))
-# [1] 2.138134
+# [1] 2.224597
 ```
 
 ## Fitting ARMA models
@@ -304,15 +302,15 @@ whitened_arma <- whiten_apply(plan_arma, X, Y, runs = runs)
 # to see how the step regressor is filtered.
 whitened_arma$X[28:36, ]
 #       intercept      task
-#  [1,] 0.7888205 0.0000000
-#  [2,] 0.7888249 0.0000000
-#  [3,] 0.7888279 0.0000000
-#  [4,] 0.7888300 1.0000000
-#  [5,] 0.7888313 0.4657323
-#  [6,] 0.7888323 0.5693939
-#  [7,] 0.7888329 0.6397975
-#  [8,] 0.7888334 0.6876133
-#  [9,] 0.7888337 0.7200883
+#  [1,] 0.7261956 0.0000000
+#  [2,] 0.7261956 0.0000000
+#  [3,] 0.7261956 0.0000000
+#  [4,] 0.7261956 1.0000000
+#  [5,] 0.7261956 0.5191500
+#  [6,] 0.7261956 0.7096813
+#  [7,] 0.7261956 0.7248784
+#  [8,] 0.7261956 0.7260905
+#  [9,] 0.7261956 0.7261872
 ```
 
 ``` r
@@ -392,10 +390,10 @@ acorr
 #  [1]  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20
 # 
 # $acf
-#  [1] -0.008413322 -0.049628810 -0.066414198 -0.004153683  0.112689339
-#  [6] -0.092193833 -0.026820366 -0.024139618  0.049228823 -0.044471239
-# [11] -0.054502513 -0.136842703 -0.032123766  0.003621034  0.004301947
-# [16] -0.021528673  0.074669753  0.030639151  0.018276696  0.040326782
+#  [1]  0.086366152 -0.184348043 -0.126474616  0.019232135  0.076929737
+#  [6] -0.042835707 -0.051502911 -0.033071925  0.001679686  0.040923025
+# [11] -0.018922875 -0.067011974 -0.003973070  0.030490781 -0.044427665
+# [16] -0.019602767  0.001304122  0.023997543  0.023107560 -0.002491034
 # 
 # $ci
 # [1] 0.1265175
@@ -404,8 +402,8 @@ acorr
 sandwich <- sandwich_from_whitened_resid(whitened$X, whitened$Y[, 1:3])
 sandwich$se
 #           [,1]      [,2]      [,3]
-# [1,] 0.1161948 0.1309954 0.1219902
-# [2,] 0.1629742 0.1837334 0.1711027
+# [1,] 0.1425762 0.1563702 0.1439597
+# [2,] 0.1961639 0.2151425 0.1980675
 ```
 
 ## Next steps

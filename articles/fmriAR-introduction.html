@@ -20,7 +20,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">fmriAR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.3.3</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.4.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -60,7 +60,7 @@
                         <h4 data-toc-skip class="author">fmriAR
 Team</h4>
             
-            <h4 data-toc-skip class="date">2026-08-22</h4>
+            <h4 data-toc-skip class="date">2026-10-09</h4>
       
       <small class="dont-index">Source: <a href="https://github.com/bbuchsbaum/fmriAR/blob/main/vignettes/fmriAR-introduction.Rmd" class="external-link"><code>vignettes/fmriAR-introduction.Rmd</code></a></small>
       <div class="d-none name"><code>fmriAR-introduction.Rmd</code></div>
@@ -149,13 +149,13 @@ selects the AR order per run using BIC, then enforces stationarity.</p>
 <span><span class="va">plan_ar</span></span>
 <span><span class="co"># fmriAR whitening plan</span></span>
 <span><span class="co">#   Method: AR</span></span>
-<span><span class="co">#   Orders: p = 2, q = 0</span></span>
+<span><span class="co">#   Orders: p = 1, q = 0</span></span>
 <span><span class="co">#   Pooling: run</span></span>
 <span><span class="co">#   Runs: 2 (1, 2)</span></span>
-<span><span class="co">#   Exact first-sample scaling: AR(1)</span></span>
+<span><span class="co">#   Segment start: exact stationary</span></span>
 <span><span class="co">#   Coefficients:</span></span>
-<span><span class="co">#     1: phi = 0.485, -0.193</span></span>
-<span><span class="co">#     2: phi = 0.482, -0.196</span></span></code></pre></div>
+<span><span class="co">#     1: phi = 0.407</span></span>
+<span><span class="co">#     2: phi = 0.403</span></span></code></pre></div>
 <p>The returned <code>fmriAR_plan</code> holds run-specific AR
 coefficients and metadata about the estimation procedure.</p>
 </div>
@@ -169,11 +169,11 @@ estimation or downstream analyses.</p>
 <code class="sourceCode R"><span><span class="va">whitened</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/whiten_apply.html">whiten_apply</a></span><span class="op">(</span><span class="va">plan_ar</span>, <span class="va">X</span>, <span class="va">Y</span>, runs <span class="op">=</span> <span class="va">runs</span><span class="op">)</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/utils/str.html" class="external-link">str</a></span><span class="op">(</span><span class="va">whitened</span><span class="op">)</span></span>
 <span><span class="co"># List of 2</span></span>
-<span><span class="co">#  $ X: num [1:240, 1:2] 1 0.515 0.708 0.708 0.708 ...</span></span>
+<span><span class="co">#  $ X: num [1:240, 1:2] 0.914 0.593 0.593 0.593 0.593 ...</span></span>
 <span><span class="co">#   ..- attr(*, "dimnames")=List of 2</span></span>
 <span><span class="co">#   .. ..$ : NULL</span></span>
 <span><span class="co">#   .. ..$ : chr [1:2] "intercept" "task"</span></span>
-<span><span class="co">#  $ Y: num [1:240, 1:60] -1.4936 -1.5949 -0.0306 -1.0101 -0.0617 ...</span></span></code></pre></div>
+<span><span class="co">#  $ Y: num [1:240, 1:60] -1.3645 -1.7121 0.0755 -0.6306 0.0286 ...</span></span></code></pre></div>
 <p>By default the function returns whitened <code>X</code> and
 <code>Y</code>. You can compute GLS coefficients with a single linear
 solve:</p>
@@ -182,9 +182,9 @@ solve:</p>
 <span><span class="va">Yw</span> <span class="op">&lt;-</span> <span class="va">whitened</span><span class="op">$</span><span class="va">Y</span></span>
 <span><span class="va">beta_gls</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/qr.html" class="external-link">qr.solve</a></span><span class="op">(</span><span class="va">Xw</span>, <span class="va">Yw</span><span class="op">[</span>, <span class="fl">1</span><span class="op">:</span><span class="fl">5</span><span class="op">]</span><span class="op">)</span></span>
 <span><span class="va">beta_gls</span></span>
-<span><span class="co">#                 [,1]       [,2]        [,3]       [,4]       [,5]</span></span>
-<span><span class="co"># intercept -0.1785576 0.03768029 -0.04137929 0.08983252 0.03839622</span></span>
-<span><span class="co"># task       1.6659992 1.38144408  1.18152789 1.45707478 1.53914426</span></span></code></pre></div>
+<span><span class="co">#                 [,1]       [,2]        [,3]      [,4]       [,5]</span></span>
+<span><span class="co"># intercept -0.1993785 0.02265309 -0.01111047 0.0902481 0.05321269</span></span>
+<span><span class="co"># task       1.6996789 1.40018444  1.12676373 1.4552355 1.51189501</span></span></code></pre></div>
 </div>
 <div class="section level2">
 <h2 id="inspecting-innovations">Inspecting innovations<a class="anchor" aria-label="anchor" href="#inspecting-innovations"></a>
@@ -199,7 +199,7 @@ across voxels.</p>
 <span>  <span class="fu"><a href="https://rdrr.io/r/base/mean.html" class="external-link">mean</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/MathFun.html" class="external-link">abs</a></span><span class="op">(</span><span class="va">ac</span><span class="op">)</span><span class="op">)</span></span>
 <span><span class="op">}</span><span class="op">)</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/mean.html" class="external-link">mean</a></span><span class="op">(</span><span class="va">lag_stats</span><span class="op">)</span></span>
-<span><span class="co"># [1] 0.05721336</span></span></code></pre></div>
+<span><span class="co"># [1] 0.08800862</span></span></code></pre></div>
 <p>For comparison, the same calculation on the pre-whitened residuals is
 typically much larger.</p>
 <p>In this simulation the mean absolute autocorrelation over lags 1–5
@@ -281,7 +281,7 @@ filters.</p>
 <span></span>
 <span><span class="va">plan_parcel</span><span class="op">$</span><span class="va">order</span></span>
 <span><span class="co"># p q </span></span>
-<span><span class="co"># 4 0</span></span></code></pre></div>
+<span><span class="co"># 2 0</span></span></code></pre></div>
 <p>When parcel pooling is requested, <code><a href="../reference/whiten_apply.html">whiten_apply()</a></code> returns
 <code>X_by</code>, a list of whitened design matrices per parcel, along
 with the voxel-wise <code>Y</code> innovations. Each
@@ -297,12 +297,10 @@ parcel pooling: each parcel gets a filter matched to its own noise.</p>
 <code class="sourceCode R"><span><span class="co"># Per-parcel AR coefficients, and confirmation that whitening changed the data</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/utils/head.html" class="external-link">head</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/lapply.html" class="external-link">sapply</a></span><span class="op">(</span><span class="va">plan_parcel</span><span class="op">$</span><span class="va">phi_by_parcel</span>, <span class="kw">function</span><span class="op">(</span><span class="va">p</span><span class="op">)</span> <span class="fu"><a href="https://rdrr.io/r/base/Round.html" class="external-link">round</a></span><span class="op">(</span><span class="va">p</span>, <span class="fl">3</span><span class="op">)</span><span class="op">)</span><span class="op">[</span>, <span class="fl">1</span><span class="op">:</span><span class="fl">4</span><span class="op">]</span><span class="op">)</span></span>
 <span><span class="co">#           1      2      3      4</span></span>
-<span><span class="co"># [1,]  0.472  0.472  0.485  0.471</span></span>
-<span><span class="co"># [2,] -0.103 -0.114 -0.161 -0.166</span></span>
-<span><span class="co"># [3,] -0.136 -0.108 -0.058 -0.057</span></span>
-<span><span class="co"># [4,]  0.041  0.042  0.000  0.000</span></span>
+<span><span class="co"># [1,]  0.474  0.472  0.496  0.483</span></span>
+<span><span class="co"># [2,] -0.134 -0.136 -0.190 -0.193</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/Extremes.html" class="external-link">max</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/MathFun.html" class="external-link">abs</a></span><span class="op">(</span><span class="va">whitened_parcel</span><span class="op">$</span><span class="va">Y</span> <span class="op">-</span> <span class="va">Y</span><span class="op">)</span><span class="op">)</span></span>
-<span><span class="co"># [1] 2.138134</span></span></code></pre></div>
+<span><span class="co"># [1] 2.224597</span></span></code></pre></div>
 </div>
 <div class="section level2">
 <h2 id="fitting-arma-models">Fitting ARMA models<a class="anchor" aria-label="anchor" href="#fitting-arma-models"></a>
@@ -335,15 +333,15 @@ interface.</p>
 <span><span class="co"># to see how the step regressor is filtered.</span></span>
 <span><span class="va">whitened_arma</span><span class="op">$</span><span class="va">X</span><span class="op">[</span><span class="fl">28</span><span class="op">:</span><span class="fl">36</span>, <span class="op">]</span></span>
 <span><span class="co">#       intercept      task</span></span>
-<span><span class="co">#  [1,] 0.7888205 0.0000000</span></span>
-<span><span class="co">#  [2,] 0.7888249 0.0000000</span></span>
-<span><span class="co">#  [3,] 0.7888279 0.0000000</span></span>
-<span><span class="co">#  [4,] 0.7888300 1.0000000</span></span>
-<span><span class="co">#  [5,] 0.7888313 0.4657323</span></span>
-<span><span class="co">#  [6,] 0.7888323 0.5693939</span></span>
-<span><span class="co">#  [7,] 0.7888329 0.6397975</span></span>
-<span><span class="co">#  [8,] 0.7888334 0.6876133</span></span>
-<span><span class="co">#  [9,] 0.7888337 0.7200883</span></span></code></pre></div>
+<span><span class="co">#  [1,] 0.7261956 0.0000000</span></span>
+<span><span class="co">#  [2,] 0.7261956 0.0000000</span></span>
+<span><span class="co">#  [3,] 0.7261956 0.0000000</span></span>
+<span><span class="co">#  [4,] 0.7261956 1.0000000</span></span>
+<span><span class="co">#  [5,] 0.7261956 0.5191500</span></span>
+<span><span class="co">#  [6,] 0.7261956 0.7096813</span></span>
+<span><span class="co">#  [7,] 0.7261956 0.7248784</span></span>
+<span><span class="co">#  [8,] 0.7261956 0.7260905</span></span>
+<span><span class="co">#  [9,] 0.7261956 0.7261872</span></span></code></pre></div>
 <div class="sourceCode" id="cb13"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="co"># Visualize how whitening transforms the task step regressor around its first onset</span></span>
 <span><span class="va">task_raw</span> <span class="op">&lt;-</span> <span class="va">X</span><span class="op">[</span>, <span class="st">"task"</span><span class="op">]</span></span>
@@ -416,10 +414,10 @@ estimation:</p>
 <span><span class="co">#  [1]  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20</span></span>
 <span><span class="co"># </span></span>
 <span><span class="co"># $acf</span></span>
-<span><span class="co">#  [1] -0.008413322 -0.049628810 -0.066414198 -0.004153683  0.112689339</span></span>
-<span><span class="co">#  [6] -0.092193833 -0.026820366 -0.024139618  0.049228823 -0.044471239</span></span>
-<span><span class="co"># [11] -0.054502513 -0.136842703 -0.032123766  0.003621034  0.004301947</span></span>
-<span><span class="co"># [16] -0.021528673  0.074669753  0.030639151  0.018276696  0.040326782</span></span>
+<span><span class="co">#  [1]  0.086366152 -0.184348043 -0.126474616  0.019232135  0.076929737</span></span>
+<span><span class="co">#  [6] -0.042835707 -0.051502911 -0.033071925  0.001679686  0.040923025</span></span>
+<span><span class="co"># [11] -0.018922875 -0.067011974 -0.003973070  0.030490781 -0.044427665</span></span>
+<span><span class="co"># [16] -0.019602767  0.001304122  0.023997543  0.023107560 -0.002491034</span></span>
 <span><span class="co"># </span></span>
 <span><span class="co"># $ci</span></span>
 <span><span class="co"># [1] 0.1265175</span></span>
@@ -428,8 +426,8 @@ estimation:</p>
 <span><span class="va">sandwich</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/sandwich_from_whitened_resid.html">sandwich_from_whitened_resid</a></span><span class="op">(</span><span class="va">whitened</span><span class="op">$</span><span class="va">X</span>, <span class="va">whitened</span><span class="op">$</span><span class="va">Y</span><span class="op">[</span>, <span class="fl">1</span><span class="op">:</span><span class="fl">3</span><span class="op">]</span><span class="op">)</span></span>
 <span><span class="va">sandwich</span><span class="op">$</span><span class="va">se</span></span>
 <span><span class="co">#           [,1]      [,2]      [,3]</span></span>
-<span><span class="co"># [1,] 0.1161948 0.1309954 0.1219902</span></span>
-<span><span class="co"># [2,] 0.1629742 0.1837334 0.1711027</span></span></code></pre></div>
+<span><span class="co"># [1,] 0.1425762 0.1563702 0.1439597</span></span>
+<span><span class="co"># [2,] 0.1961639 0.2151425 0.1980675</span></span></code></pre></div>
 </div>
 <div class="section level2">
 <h2 id="next-steps">Next steps<a class="anchor" aria-label="anchor" href="#next-steps"></a>

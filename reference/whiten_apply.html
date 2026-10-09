@@ -7,7 +7,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">fmriAR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.3.3</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.4.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -82,7 +82,11 @@ contiguous block and may not be missing.</p></dd>
 
 
 <dt id="arg-censor">censor<a class="anchor" aria-label="anchor" href="#arg-censor"></a></dt>
-<dd><p>Optional indices of censored TRs (1-based); filter resets after gaps.</p></dd>
+<dd><p>Optional censored timepoints: 1-based indices or a logical mask
+of length <code>nrow(Y)</code>. The filter restarts (with exact stationary
+initialisation when the plan uses <code>exact_first</code>) at the first frame after
+each censored one. When omitted and the plan was fitted on data with the
+same number of timepoints, the plan's own <code>censor</code> set is used.</p></dd>
 
 
 <dt id="arg-parcels">parcels<a class="anchor" aria-label="anchor" href="#arg-parcels"></a></dt>
@@ -90,16 +94,24 @@ contiguous block and may not be missing.</p></dd>
 
 
 <dt id="arg-inplace">inplace<a class="anchor" aria-label="anchor" href="#arg-inplace"></a></dt>
-<dd><p>Modify inputs in place (logical).</p></dd>
+<dd><p>Deprecated and ignored. The inputs were never modified (R's
+copy-on-modify semantics prevent it safely), so <code>TRUE</code> only made the
+result invisible. Supplying it now warns; it will be removed in a future
+release.</p></dd>
 
 
 <dt id="arg-parallel">parallel<a class="anchor" aria-label="anchor" href="#arg-parallel"></a></dt>
-<dd><p>Use OpenMP parallelism if available.</p></dd>
+<dd><p>Use OpenMP parallelism if available. The thread count can be
+capped with <code>options(fmriAR.max_threads = k)</code>.</p></dd>
 
 </dl></div>
     <div class="section level2">
     <h2 id="value">Value<a class="anchor" aria-label="anchor" href="#value"></a></h2>
-    <p>List with whitened data. Parcel plans return <code>X_by</code> per parcel; others return a single <code>X</code> matrix.</p>
+    <p>List with whitened data. Parcel plans return <code>X_by</code> per parcel; others
+return a single <code>X</code> matrix. When censoring is in effect the list also
+carries <code>censor</code>, the censored row indices. Those rows are still present in
+<code>X</code>/<code>Y</code> (filtered from the preceding history) and should be dropped before
+fitting, e.g. <code>lm.fit(out$X[-out$censor, ], out$Y[-out$censor, ])</code>.</p>
     </div>
 
     <div class="section level2">

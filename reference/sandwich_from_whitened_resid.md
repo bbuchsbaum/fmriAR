@@ -9,9 +9,10 @@ sandwich_from_whitened_resid(
   Xw,
   Yw,
   beta = NULL,
-  type = c("iid", "hc0"),
+  type = c("iid", "hc0", "hac"),
   df_mode = c("rankX", "n-p"),
-  runs = NULL
+  runs = NULL,
+  hac_lag = NULL
 )
 ```
 
@@ -31,7 +32,11 @@ sandwich_from_whitened_resid(
 
 - type:
 
-  Either "iid" (default) or "hc0" for a robust sandwich.
+  `"iid"` (default) assumes the whitened errors are white and
+  homoskedastic. `"hc0"` is a heteroskedasticity-robust sandwich.
+  `"hac"` is a Newey-West (Bartlett kernel) sandwich computed within
+  runs, which stays valid when the noise model leaves some
+  autocorrelation behind.
 
 - df_mode:
 
@@ -39,11 +44,20 @@ sandwich_from_whitened_resid(
 
 - runs:
 
-  Optional run labels (reserved for future per-run scaling).
+  Optional run labels (length `nrow(Xw)`). Used by `type = "hac"` so
+  that no lag product spans a run boundary.
+
+- hac_lag:
+
+  Bandwidth for `type = "hac"`. Defaults to
+  `floor(4 * (n_run / 100)^(2/9))` using the median run length.
 
 ## Value
 
 List containing standard errors, innovation variances, and XtX inverse.
+Coefficients that are not estimable because `Xw` is rank deficient get
+`NA` standard errors (and `NA` rows/columns in `XtX_inv`), following
+[`stats::lm()`](https://rdrr.io/r/stats/lm.html).
 
 ## Examples
 

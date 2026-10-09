@@ -15,6 +15,7 @@ fit_noise(
   p = "auto",
   q = 0L,
   p_max = 6L,
+  q_max = 2L,
   exact_first = c("ar1", "none"),
   pooling = c("global", "run", "parcel"),
   parcels = NULL,
@@ -64,23 +65,41 @@ fit_noise(
 
 - method:
 
-  Either "ar" or "arma".
+  Either "ar" or "arma". ARMA models are estimated by a Hannan–Rissanen
+  regression pooled over voxels (every voxel is treated as a replicate
+  series sharing the coefficients), with all lags kept inside contiguous
+  run/censor segments.
 
 - p:
 
-  AR order (integer or "auto" if method == "ar").
+  AR order (integer or "auto" if method == "ar"). An explicit order is
+  honoured even when it exceeds `p_max`.
 
 - q:
 
-  MA order (integer).
+  MA order (integer), or `"auto"` (ARMA only) to choose it by BIC from
+  `0:q_max`.
 
 - p_max:
 
-  Maximum AR order when `p = "auto"`.
+  Maximum AR order when `p = "auto"`. For `method = "arma"`,
+  `p = "auto"` searches `0:p_max` jointly with the MA order by BIC on
+  the pooled Hannan–Rissanen regression.
+
+- q_max:
+
+  Maximum MA order when `q = "auto"`.
 
 - exact_first:
 
-  Apply exact AR(1) scaling at segment starts ("ar1" or "none").
+  How
+  [`whiten_apply()`](https://bbuchsbaum.github.io/fmriAR/reference/whiten_apply.md)
+  treats the start of each run or post-censoring segment. `"ar1"`
+  (default; the name is historical) applies the exact stationary
+  initialisation of the fitted AR/ARMA model, i.e. exact GLS whitening
+  within each segment; for AR(1) this is the familiar `sqrt(1 - phi^2)`
+  scaling of the first sample. `"none"` uses the conditional filter with
+  a zero pre-sample.
 
 - pooling:
 
@@ -171,16 +190,17 @@ implies rather than only its correlation structure:
   `fit_noise(p = 1, p_max = 6)` returns seven values, not two. Under
   global pooling every run is truncated to the shortest available length
   before averaging, since a zero-padded autocovariance is not a valid
-  covariance.
+  covariance. Global AR coefficients are fitted by Yule–Walker on the
+  frame-weighted average of the runs' autocorrelations.
 
-- `sigma2`: list of innovation variances, matching `gamma`, derived as
-  `gamma_0 - sum_k phi_k gamma_k` from the coefficients stored on the
-  plan so the two are always mutually consistent. `NA` for
-  `method = "arma"`, where no comparably cheap voxel-scale innovation
-  variance is available, and `NA` whenever `gamma` does not reach lag
+- `sigma2`: list of innovation variances, matching `gamma`. For
+  `method = "ar"` it is derived as `gamma_0 - sum_k phi_k gamma_k` from
+  the coefficients stored on the plan so the two are always mutually
+  consistent, and is `NA` whenever `gamma` does not reach lag
   `length(phi)` – heavy censoring can truncate it that far, and a
   partial sum would overstate the innovation variance rather than report
-  that it is unavailable.
+  that it is unavailable. For `method = "arma"` it is the mean squared
+  exact-whitened residual over all voxels and valid frames.
 
 - `gamma_by_parcel`, `sigma2_by_parcel`: the same quantities per parcel
   when `pooling = "parcel"`, keyed like `phi_by_parcel`.

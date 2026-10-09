@@ -44,7 +44,12 @@ whiten_apply(
 
 - censor:
 
-  Optional indices of censored TRs (1-based); filter resets after gaps.
+  Optional censored timepoints: 1-based indices or a logical mask of
+  length `nrow(Y)`. The filter restarts (with exact stationary
+  initialisation when the plan uses `exact_first`) at the first frame
+  after each censored one. When omitted and the plan was fitted on data
+  with the same number of timepoints, the plan's own `censor` set is
+  used.
 
 - parcels:
 
@@ -52,16 +57,24 @@ whiten_apply(
 
 - inplace:
 
-  Modify inputs in place (logical).
+  Deprecated and ignored. The inputs were never modified (R's
+  copy-on-modify semantics prevent it safely), so `TRUE` only made the
+  result invisible. Supplying it now warns; it will be removed in a
+  future release.
 
 - parallel:
 
-  Use OpenMP parallelism if available.
+  Use OpenMP parallelism if available. The thread count can be capped
+  with `options(fmriAR.max_threads = k)`.
 
 ## Value
 
 List with whitened data. Parcel plans return `X_by` per parcel; others
-return a single `X` matrix.
+return a single `X` matrix. When censoring is in effect the list also
+carries `censor`, the censored row indices. Those rows are still present
+in `X`/`Y` (filtered from the preceding history) and should be dropped
+before fitting, e.g.
+`lm.fit(out$X[-out$censor, ], out$Y[-out$censor, ])`.
 
 ## Examples
 

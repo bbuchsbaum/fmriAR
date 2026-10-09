@@ -7,7 +7,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">fmriAR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.3.3</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.4.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -47,9 +47,10 @@
 <span>  <span class="va">Xw</span>,</span>
 <span>  <span class="va">Yw</span>,</span>
 <span>  beta <span class="op">=</span> <span class="cn">NULL</span>,</span>
-<span>  type <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"iid"</span>, <span class="st">"hc0"</span><span class="op">)</span>,</span>
+<span>  type <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"iid"</span>, <span class="st">"hc0"</span>, <span class="st">"hac"</span><span class="op">)</span>,</span>
 <span>  df_mode <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"rankX"</span>, <span class="st">"n-p"</span><span class="op">)</span>,</span>
-<span>  runs <span class="op">=</span> <span class="cn">NULL</span></span>
+<span>  runs <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  hac_lag <span class="op">=</span> <span class="cn">NULL</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -70,7 +71,10 @@
 
 
 <dt id="arg-type">type<a class="anchor" aria-label="anchor" href="#arg-type"></a></dt>
-<dd><p>Either "iid" (default) or "hc0" for a robust sandwich.</p></dd>
+<dd><p><code>"iid"</code> (default) assumes the whitened errors are white and
+homoskedastic. <code>"hc0"</code> is a heteroskedasticity-robust sandwich. <code>"hac"</code> is
+a Newey-West (Bartlett kernel) sandwich computed within runs, which stays
+valid when the noise model leaves some autocorrelation behind.</p></dd>
 
 
 <dt id="arg-df-mode">df_mode<a class="anchor" aria-label="anchor" href="#arg-df-mode"></a></dt>
@@ -78,12 +82,21 @@
 
 
 <dt id="arg-runs">runs<a class="anchor" aria-label="anchor" href="#arg-runs"></a></dt>
-<dd><p>Optional run labels (reserved for future per-run scaling).</p></dd>
+<dd><p>Optional run labels (length <code>nrow(Xw)</code>). Used by <code>type = "hac"</code>
+so that no lag product spans a run boundary.</p></dd>
+
+
+<dt id="arg-hac-lag">hac_lag<a class="anchor" aria-label="anchor" href="#arg-hac-lag"></a></dt>
+<dd><p>Bandwidth for <code>type = "hac"</code>. Defaults to
+<code>floor(4 * (n_run / 100)^(2/9))</code> using the median run length.</p></dd>
 
 </dl></div>
     <div class="section level2">
     <h2 id="value">Value<a class="anchor" aria-label="anchor" href="#value"></a></h2>
-    <p>List containing standard errors, innovation variances, and XtX inverse.</p>
+    <p>List containing standard errors, innovation variances, and XtX
+inverse. Coefficients that are not estimable because <code>Xw</code> is rank
+deficient get <code>NA</code> standard errors (and <code>NA</code> rows/columns in <code>XtX_inv</code>),
+following <code><a href="https://rdrr.io/r/stats/lm.html" class="external-link">stats::lm()</a></code>.</p>
     </div>
 
     <div class="section level2">

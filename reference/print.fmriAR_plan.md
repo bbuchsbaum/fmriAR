@@ -34,7 +34,7 @@ print(plan)
 #>   Method: AR
 #>   Orders: p = 2, q = 0
 #>   Pooling: global
-#>   Exact first-sample scaling: AR(1)
+#>   Segment start: exact stationary
 #>   Coefficients:
 #>     global: phi = 0.180, -0.133
 ```

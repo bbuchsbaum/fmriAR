@@ -1,5 +1,128 @@
 # Changelog
 
+## fmriAR 0.4.0
+
+Validated with `tools/validation/accuracy_benchmark.R`, which runs the
+same seeded scenarios against two installed versions; numbers below are
+0.3.3 -\> this version.
+
+### Breaking changes
+
+- `whiten_apply(inplace =)` is deprecated and ignored, with a warning.
+  The inputs were never modified (R’s copy-on-modify semantics prevent
+  doing so safely), so the argument only made the result invisible.
+- `fit_noise(method = "arma", p = "auto")` now chooses the AR order by
+  BIC from `0:p_max` instead of always fitting AR order 2 (see below).
+- Results change where the fixes below say so: exact start-up for
+  AR(p)/ARMA, pooled ARMA estimation, per-voxel
+  [`acorr_diagnostics()`](https://bbuchsbaum.github.io/fmriAR/reference/acorr_diagnostics.md),
+  the BIC penalty, and `compat$whiten_with_phi(exact_first = TRUE)`.
+
+### Fixes
+
+- An explicit `p` larger than `p_max` is now honoured;
+  `fit_noise(p = 8)` returned an AR(6) because the order was capped at
+  the default `p_max = 6`.
+- Automatic order selection used `2 n log(sigma2) + k log(n)`, half the
+  standard BIC penalty. For a single-voxel AR(1) it chose p \> 1 17% of
+  the time, now 3% (power to detect a true AR(2) with phi = (0.5, 0.25)
+  at n = 200 goes from 97% to 89%, the expected price of the correct
+  penalty).
+- [`whiten_apply()`](https://bbuchsbaum.github.io/fmriAR/reference/whiten_apply.md)
+  accepts a logical `censor` mask. It was passed through
+  [`as.integer()`](https://rdrr.io/r/base/integer.html), censoring only
+  timepoint 1, which also broke
+  [`whiten()`](https://bbuchsbaum.github.io/fmriAR/reference/whiten.md).
+- [`whiten_apply()`](https://bbuchsbaum.github.io/fmriAR/reference/whiten_apply.md)
+  uses the plan’s `censor` set when none is given and the data have the
+  length the plan was fitted on (plans now record `n_time`), mirroring
+  the existing `runs` fallback.
+- [`whiten_apply()`](https://bbuchsbaum.github.io/fmriAR/reference/whiten_apply.md)
+  errors when a per-run plan is applied to data with a different number
+  of runs instead of silently pairing runs with the wrong coefficients.
+  When censoring is active the result carries `censor`, the rows to drop
+  before fitting.
+- `enforce_invertible_ma()` moved roots inside the unit circle by
+  reflection, which leaves a unit root where it is (`theta = -1` stayed
+  `-1`). Roots are now kept at modulus \>= 1/0.99, mirroring the AR PACF
+  bound.
+- [`sandwich_from_whitened_resid()`](https://bbuchsbaum.github.io/fmriAR/reference/sandwich_from_whitened_resid.md)
+  no longer fails on rank-deficient designs; non-estimable coefficients
+  get `NA` standard errors, as in
+  [`lm()`](https://rdrr.io/r/stats/lm.html).
+- Multiscale parcel weights depended on the units of the data (the
+  dispersion term was a raw variance). They are now unit-free.
+- Multiscale `acvf_pooled` with `p = "auto"` fitted every parcel at
+  `p_max`; it now uses the largest order selected at any scale (mean
+  fitted order in the benchmark 6 -\> 1.4 for a true AR(1), with
+  unchanged accuracy).
+- `acorr_diagnostics(aggregate = "mean"/"median")` aggregates per-voxel
+  autocorrelations. It used the autocorrelation of the voxel-mean
+  series, which measures shared signal and reported 0.86 lag-1
+  autocorrelation for voxels whose own was 0.25.
+- `compat$update_plan()` keeps the previous plan’s `censor` and
+  `exact_first`; `compat$whiten_with_phi()` now defaults to
+  `exact_first = TRUE`, matching `plan_from_phi()`.
+- The parallel-determinism test passed its input matrices to the
+  in-place kernel, so all outputs aliased one buffer and the test
+  compared it to itself.
+
+### Algorithms
+
+- Exact stationary start-up for any AR(p)/ARMA(p,q) (Ansley’s banded
+  Cholesky). `exact_first = "ar1"` previously rescaled only AR(1)
+  starts; for AR(2) (1.2, -0.5) the first two whitened samples of every
+  run or censor segment had variance 3.73 and 1.93, now 1.01 and 1.01.
+  Whitening now equals dense-Cholesky GLS within each segment to ~1e-14;
+  AR(1) output is unchanged. GLS slope variance in short runs: AR(2)
+  4x60 runs 50.3 -\> 48.5, ARMA(1,1) 6x40 runs 43.1 -\> 39.5 (x1e-3);
+  type-I rates stay nominal.
+- ARMA is estimated by a Hannan-Rissanen regression pooled over voxels
+  and confined to contiguous segments, instead of on the voxel-mean
+  series with censoring gaps spliced together. ARMA(1,1) RMSE
+  (phi/theta) 0.079/0.088 -\> 0.014/0.014; with 20% censoring
+  0.112/0.165 -\> 0.035/0.040; mean residual autocorrelation after
+  whitening drops by 22-56% across scenarios. The censoring warning is
+  gone, and the plan’s `sigma2` is now reported for ARMA at voxel scale.
+  `afni_restricted_plan(estimate_ma1 = TRUE)` uses the same pooled
+  estimator.
+- Global AR pooling fits Yule-Walker on the frame-weighted average of
+  the runs’ autocorrelations rather than averaging per-run coefficients
+  (identical for AR(1); slightly better for AR(p)).
+- ARMA orders can be selected automatically: `q = "auto"` (new `q_max`,
+  default 2) and `p = "auto"` search the order grid by BIC on the pooled
+  Hannan-Rissanen regression. All candidates are column subsets of one
+  regression, so selection costs one extra pass over the data. The BIC
+  sample size is frames times the effective number of independent voxels
+  (Kish design effect from the mean inter-voxel correlation): counting
+  frames alone under-fitted shared slow noise, counting every voxel
+  over-fitted when voxels share fluctuations. Order recovery: 100% for
+  white noise and AR(1), 80% for ARMA(1,1) (30 voxels x 240 frames).
+- ARMA(1,1) noise plus a shared slow AR(0.95) component is not an
+  ARMA(1,1) process, and the single shared realisation keeps even the
+  empirical voxel autocorrelation ~0.14 from the theoretical one, so no
+  estimator can recover “the” (1,1) parameters there. What can be fixed
+  is how white the voxels end up. Residual autocorrelation after
+  whitening: 0.135 in 0.3.3, 0.061 with a fixed (1,1) fit now, 0.055
+  with automatic orders, against 0.052 for a correctly specified model.
+- Single-series Hannan-Rissanen skips the long-AR burn-in.
+- `sandwich_from_whitened_resid(type = "hac")`: Newey-West standard
+  errors within runs, for when the noise model leaves autocorrelation
+  behind.
+
+### Performance
+
+- OpenMP is now actually compiled (`SHLIB_OPENMP_CXXFLAGS`); thread
+  count honours `options(fmriAR.max_threads)`. R API calls were moved
+  out of the parallel region, where an interrupt would have terminated
+  R.
+- Segment-aware lag sums and the Hannan-Rissanen normal equations run in
+  C++. At 400 x 20000: `fit_noise(p = "auto")` 1.07 s -\> 0.29 s, HC0
+  sandwich 1.07 s -\> 0.30 s (vectorised, identical results). Pooled
+  ARMA estimation does strictly more work than the old single-series fit
+  (0.47 s -\> 0.93 s).
+- Parcel plans whiten the design once per distinct filter.
+
 ## fmriAR 0.3.3
 
 ### Fixes
