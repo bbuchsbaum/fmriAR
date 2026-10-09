@@ -14,6 +14,9 @@ metric not listed is unchanged.
   now fixed by the short-memory assumption the truncated correction already
   makes (autocovariance ~0 at the end of the lag budget); well-determined
   directions are solved exactly, so well-conditioned designs are unaffected.
+  Near-null means small relative to the median singular value, so designs
+  that leave few residual degrees of freedom (where the whole spectrum is
+  small) still get the exact solve.
   RMSE at 10% censoring 0.446 -> 0.072; without censoring 0.035 -> 0.020.
 * Parcel pooling estimated each parcel from its parcel-mean time series, whose
   autocorrelation is dominated by whatever the voxels share. Parcels are now

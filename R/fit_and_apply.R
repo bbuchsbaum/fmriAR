@@ -311,7 +311,7 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 # breaks that constraint: noise along the near-null direction grew 15-fold at
 # 10% censoring and the exact solve returned phi with sd 4 for a truth of 0.4.
 #
-# Directions with singular value below `sv_tol` of the largest are therefore
+# Directions with singular value below `sv_tol` of the median are therefore
 # not taken from the data. Their coefficients are chosen so the tail of the
 # corrected autocovariance (the last `tail_frac` of the budget) is as close to
 # zero as possible -- the same short-memory assumption the truncated
@@ -321,7 +321,12 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
   L <- ncol(A)
   if (L < 8L) return(as.numeric(solve(A, g)))
   s <- svd(A)
-  keep <- s$d > sv_tol * s$d[1L]
+  # Relative to the median singular value, not the largest: the target is an
+  # isolated near-null direction (0.009 against a bulk near 1 for drift
+  # designs). When the residual degrees of freedom barely exceed the lag budget
+  # the whole spectrum is small relative to the first value, and measuring
+  # against it discarded nearly every direction (phi -0.04 for a truth of 0.5).
+  keep <- s$d > sv_tol * stats::median(s$d)
   if (all(keep)) return(as.numeric(solve(A, g)))
   x0 <- s$v[, keep, drop = FALSE] %*%
     (crossprod(s$u[, keep, drop = FALSE], g) / s$d[keep])
