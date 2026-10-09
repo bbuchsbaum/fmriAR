@@ -366,9 +366,8 @@ test_that("multiscale autocovariance covers the pooling target", {
   # so .ms_pad() zero-filled the remaining lags and Yule-Walker on the padded
   # vector produced coefficients pinned at the stationarity boundary.
   M <- ar_sim(300L, 0.5, nvox = 3L, seed = 2901)
-  colnames(M) <- as.character(seq_len(ncol(M)))
   est1 <- fmriAR:::.ms_estimate_scale(
-    M, function(y) list(phi = 0.5, order = c(p = 1L, q = 0L)),
+    M, seq_len(ncol(M)), function(y) list(phi = 0.5, order = c(p = 1L, q = 0L)),
     run_starts0 = 0L, lag_max = 5L)
   for (g in est1$acvf) {
     expect_gte(length(g), 6L)            # lags 0..5, never truncated to p + 1

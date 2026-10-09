@@ -220,8 +220,6 @@ test_that("unsupported correction combinations are refused, not silently ignored
 
   expect_error(fit_noise(R, design = X, acvf_correction = acvf_bias_matrix(X, max_lag = 3L)),
                "not both")
-  expect_error(fit_noise(R, pooling = "parcel", parcels = rep(1:4, each = 2), design = X),
-               "not yet supported")
   expect_error(fit_noise(R, method = "arma", p = 1L, q = 1L, design = X),
                "method = 'ar' only")
   expect_error(fit_noise(R, design = X[1:50, , drop = FALSE]),

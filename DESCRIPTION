@@ -1,7 +1,7 @@
 Package: fmriAR
 Type: Package
 Title: Fast AR and ARMA Noise Whitening for Functional MRI (fMRI) Design and Data
-Version: 0.4.0
+Version: 0.4.1
 Authors@R: person("Bradley", "Buchsbaum", email = "brad.buchsbaum@gmail.com", role = c("aut", "cre", "cph"))
 Description: Lightweight utilities to estimate autoregressive (AR) and
     autoregressive moving average (ARMA) noise models from residuals and apply

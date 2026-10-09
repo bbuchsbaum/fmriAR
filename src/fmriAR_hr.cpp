@@ -109,12 +109,16 @@ static inline void enforce_ar_stationarity(arma::vec& phi) {
   }
 
   if (changed) {
+    // arma::roots() drops leading zero coefficients, so when phi_p == 0 there
+    // are fewer than p roots. Index by the actual degree d and zero the rest;
+    // indexing by p mapped the constant term onto phi_1 (phi_1 = -1).
+    const int d = static_cast<int>(roots.n_elem);
     arma::cx_vec coeff = poly_from_roots(roots);
     const arma::cx_double scale = coeff[coeff.n_elem - 1];
     if (std::abs(scale) < 1e-12) return;
     coeff /= scale;
     for (int i = 0; i < p; ++i) {
-      phi[i] = -coeff[p - (i + 1)].real();
+      phi[i] = (i < d) ? -coeff[d - (i + 1)].real() : 0.0;
     }
   }
 }
@@ -139,14 +143,29 @@ static inline void enforce_ma_invertibility(arma::vec& theta) {
   }
 
   if (changed) {
+    // See enforce_ar_stationarity(): index by the degree roots() returned.
+    const int d = static_cast<int>(roots.n_elem);
     arma::cx_vec coeff = poly_from_roots(roots);
     const arma::cx_double scale = coeff[coeff.n_elem - 1];
     if (std::abs(scale) < 1e-12) return;
     coeff /= scale;
     for (int j = 0; j < q; ++j) {
-      theta[j] = coeff[q - (j + 1)].real();
+      theta[j] = (j < d) ? coeff[d - (j + 1)].real() : 0.0;
     }
   }
+}
+
+// Test hooks for the root-reflection helpers.
+// [[Rcpp::export]]
+arma::vec enforce_ar_stationarity_cpp(arma::vec phi) {
+  enforce_ar_stationarity(phi);
+  return phi;
+}
+
+// [[Rcpp::export]]
+arma::vec enforce_ma_invertibility_cpp(arma::vec theta) {
+  enforce_ma_invertibility(theta);
+  return theta;
 }
 
 static Rcpp::List hr_failure(int p, int q, int p_big, int iter) {

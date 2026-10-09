@@ -111,9 +111,17 @@
   max_lag <- max(0L, as.integer(max_lag))
   if (nv < 2L) return(diag(max_lag + 1L))
 
-  R <- -tcrossprod(Q[idx, , drop = FALSE], Q)
-  R[cbind(seq_len(nv), idx)] <- R[cbind(seq_len(nv), idx)] + 1
-  R <- R - rep(colMeans(R), each = nv)
+  # The residual operator restricted to the valid rows and centred is
+  #   R = P (E - Q_idx Q') = B - U Q',   B = P E,  U = P Q_idx,
+  # where E selects the valid timepoints and P centres over them. Expanding
+  #   R S_k R' = B S_k B' - B S_k Q U' - U Q' S_k B' + U (Q' S_k Q) U'
+  # needs only r = rank(design) columns per lag instead of the dense nv x n
+  # operator, so the cost drops from O(L^2 nv n) to O(L^2 nv r + L n r).
+  r <- ncol(Q)
+  Qi <- Q[idx, , drop = FALSE]
+  U <- Qi - rep(colMeans(Qi), each = nv)
+  m <- numeric(n)
+  m[idx] <- 1
 
   a_list <- vector("list", max_lag + 1L)
   b_list <- vector("list", max_lag + 1L)
@@ -131,12 +139,26 @@
 
   A <- diag(max_lag + 1L)
   for (k in 0:max_lag) {
-    SkR <- .apply_lag_operator(R, k, run_vec)
+    # S_k Q (n x r) and S_k m, with S_k the within-run lag-k indicator.
+    SkQ <- if (r) t(.apply_lag_operator(t(Q), k, run_vec)) else matrix(0, n, 0L)
+    Skm <- as.numeric(.apply_lag_operator(matrix(m, nrow = 1L), k, run_vec))
+    e_vec <- Skm[idx]                         # (E S_k m) over valid rows
+    msm <- sum(e_vec)                         # m' S_k m
+    SkQ_i <- SkQ[idx, , drop = FALSE]
+    X <- SkQ_i - rep(colSums(SkQ_i) / nv, each = nv)   # B S_k Q
+    G <- crossprod(Q, SkQ)                    # Q' S_k Q
     for (h in 0:max_lag) {
-      if (npair[h + 1L] <= 0) next
-      A[h + 1L, k + 1L] <-
-        sum(R[a_list[[h + 1L]], , drop = FALSE] *
-            SkR[b_list[[h + 1L]], , drop = FALSE]) / npair[h + 1L]
+      np <- npair[h + 1L]
+      if (np <= 0) next
+      a <- a_list[[h + 1L]]; b <- b_list[[h + 1L]]
+      # B S_k B': E S_k E' contributes one per pair exactly when the pair
+      # spacing equals k (pairs never straddle a gap, so spacing in time is h).
+      t1 <- (if (h == k) np else 0) -
+        (sum(e_vec[a]) + sum(e_vec[b])) / nv + np * msm / nv^2
+      t2 <- if (r) sum(X[a, , drop = FALSE] * U[b, , drop = FALSE]) else 0
+      t3 <- if (r) sum(X[b, , drop = FALSE] * U[a, , drop = FALSE]) else 0
+      t4 <- if (r) sum((U[a, , drop = FALSE] %*% G) * U[b, , drop = FALSE]) else 0
+      A[h + 1L, k + 1L] <- (t1 - t2 - t3 + t4) / np
     }
   }
   A
@@ -199,7 +221,16 @@
 #'
 #' One matrix is returned per run, because [fit_noise()] estimates each run
 #' separately and the residual operator restricted to a run still involves the
-#' whole design.
+#' whole design. Under `pooling = "parcel"`, which pools lag products across
+#' runs, the run matrices are combined in proportion to the lag pairs each run
+#' contributes.
+#'
+#' Projecting out run means and slow drift leaves the map with near-null
+#' directions (roughly a constant offset across lags). When the correction is
+#' applied, those directions are fixed by the same short-memory assumption the
+#' truncated system already makes (the autocovariance is near zero at the end
+#' of the budget) rather than taken from the data, which keeps the correction
+#' stable under censoring.
 #'
 #' The correction is exact for noise whose autocovariance dies within `max_lag`.
 #' Under long memory it is partial, since truncating the system aliases in
@@ -207,7 +238,7 @@
 #' near 20-25 lags is typically enough; without high-pass it exceeds 150 and the
 #' approach stops being practical.
 #'
-#' Cost is `O(max_lag^2 * n_valid * n)` per run, so it is worth caching.
+#' Cost is `O(max_lag^2 * n_valid * r)` per run for a design of rank `r`.
 #'
 #' @param design Numeric design matrix (timepoints x regressors), the one whose
 #'   projection produced the residuals.
@@ -246,4 +277,34 @@ acvf_bias_matrix <- function(design, runs = NULL, censor = NULL, max_lag = 25L) 
     return(correction)
   }
   stop("'acvf_correction' must be a matrix or a list of matrices")
+}
+
+# Combine per-run bias matrices into the map for an estimator that pools lag
+# products across runs (parcel pooling). The pooled raw estimate at lag h is the
+# pair-weighted mean of the runs' raw estimates, so
+#   E[gamma_pool_h] = sum_r (pairs_rh / pairs_h) A_r[h, ] gamma,
+# exact given the same segmentation and per-run centering the estimator uses.
+# `seg` is .valid_segments() output; runs whose matrix was dropped as
+# ill-conditioned enter uncorrected (identity rows).
+.pool_corrections <- function(corr_by_run, seg) {
+  if (is.null(corr_by_run)) return(NULL)
+  have <- !vapply(corr_by_run, is.null, logical(1))
+  if (!any(have)) return(NULL)
+  L <- nrow(corr_by_run[[which(have)[1L]]])
+  seg_len <- diff(c(seg$starts0, length(seg$idx)))
+  seg_run <- seg$run_id[seg$starts0 + 1L]
+  num <- matrix(0, L, L)
+  den <- numeric(L)
+  for (r in seq_along(corr_by_run)) {
+    lens <- seg_len[seg_run == r]
+    if (!length(lens)) next
+    w <- vapply(0:(L - 1L), function(h) sum(pmax(0, lens - h)), 0)
+    A <- if (is.null(corr_by_run[[r]])) diag(L) else corr_by_run[[r]]
+    num <- num + w * A
+    den <- den + w
+  }
+  out <- diag(L)
+  ok <- den > 0
+  out[ok, ] <- num[ok, , drop = FALSE] / den[ok]
+  out
 }

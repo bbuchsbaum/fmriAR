@@ -197,6 +197,65 @@ add("S9b multiscale acvf_pooled auto", "phi1 RMSE", mean(ms_b[, 1]))
 add("S9b multiscale acvf_pooled auto", "fitted order (mean)", mean(ms_b[, 2]))
 add("S9b multiscale acvf_pooled auto", "whitened mean|acf1..3|", mean(ms_b[, 3]))
 
+# S13: plain parcel pooling (no multiscale), with and without a slow
+# component shared by the voxels of each parcel. The target is the voxels'
+# own autocorrelation: phi1 against the mean per-voxel lag-1 autocorrelation,
+# and residual autocorrelation after whitening.
+parcel_scn <- function(label, seed, shared) {
+  set.seed(seed)
+  r <- t(replicate(20, {
+    pf <- rep(1:8, each = 16)
+    phi_p <- seq(0.2, 0.6, length.out = 8)
+    R <- vapply(seq_along(pf), function(j)
+      as.numeric(stats::arima.sim(list(ar = phi_p[pf[j]]), 200)), numeric(200))
+    if (shared > 0) {
+      for (k in 1:8) {
+        g <- as.numeric(stats::filter(rnorm(200), 0.9, method = "recursive"))
+        R[, pf == k] <- R[, pf == k] + shared * g
+      }
+    }
+    pl <- fit_noise(R, pooling = "parcel", parcels = pf, p = 1)
+    est <- vapply(pl$phi_by_parcel, function(x) x[1] %||% 0, 0)
+    vox_rho <- vapply(1:8, function(k) mean(apply(R[, pf == k], 2, function(y)
+      stats::acf(y, 1, plot = FALSE)$acf[2])), 0)
+    w <- whiten_apply(pl, matrix(1, 200, 1), R, parcels = pf)$Y
+    c(sqrt(mean((est - vox_rho)^2)), sqrt(mean((est - phi_p)^2)), whiteness(w, rep(1, 200)))
+  }))
+  add(label, "RMSE(phi1 - voxel lag-1 acf)", mean(r[, 1]))
+  add(label, "RMSE(phi1 - generating phi)", mean(r[, 2]))
+  add(label, "whitened mean|acf1..3|", mean(r[, 3]))
+}
+parcel_scn("S13a parcel p=1", 1301, shared = 0)
+parcel_scn("S13b parcel p=1 + shared slow", 1302, shared = 0.5)
+
+# S14: residual-bias correction with drift regressors, with/without censoring
+dct_basis <- function(L, k) sapply(1:k, function(j) cos(pi * j * (seq_len(L) - 0.5) / L))
+for (cf in c(0, 0.1)) {
+  set.seed(1400 + 10 * cf)
+  n <- 300; runs <- rep(1:2, each = 150)
+  Xd <- cbind(model.matrix(~ factor(runs) - 1),
+              rbind(cbind(dct_basis(150, 6), matrix(0, 150, 6)),
+                    cbind(matrix(0, 150, 6), dct_basis(150, 6))),
+              rep(rep(c(0, 1), each = 10), length.out = n))
+  est <- t(replicate(30, {
+    E <- sim_arma(n, 30, 0.4)
+    R <- E - Xd %*% qr.solve(Xd, E)
+    cen <- if (cf > 0) sort(sample(n, cf * n)) else NULL
+    g <- suppressWarnings(fit_noise(R, runs = runs, p = 1, censor = cen, design = Xd))$phi[[1]]
+    pc <- tryCatch(suppressWarnings(fit_noise(R, runs = runs, p = 1, censor = cen, design = Xd,
+                                              pooling = "parcel", parcels = rep(1:3, each = 10))),
+                   error = function(e) NULL)
+    c(g, if (is.null(pc)) NA else mean(unlist(pc$phi_by_parcel)))
+  }))
+  lab <- sprintf("S14 design correction, %d%% censor", round(100 * cf))
+  add(lab, "global phi RMSE (truth 0.4)", sqrt(mean((est[, 1] - 0.4)^2)))
+  add(lab, "parcel phi RMSE (truth 0.4)", sqrt(mean((est[, 2] - 0.4)^2)))
+}
+add("timing", "acvf_bias_matrix n=800, 25 lags [s]", {
+  Xb <- cbind(1, poly(seq_len(800), 3), matrix(rnorm(800 * 6), 800))
+  min(vapply(1:3, function(i) system.time(acvf_bias_matrix(Xb, runs = rep(1:2, each = 400), max_lag = 25))[["elapsed"]], 0))
+})
+
 # S11: global ARMA, two runs, different run lengths
 set.seed(1101)
 est <- t(replicate(40, {

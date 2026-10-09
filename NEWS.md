@@ -1,3 +1,49 @@
+# fmriAR 0.4.1
+
+Numbers are 0.4.0 -> 0.4.1 from `tools/validation/accuracy_benchmark.R`; every
+metric not listed is unchanged.
+
+## Fixes
+
+* Residual-bias correction (`design =` / `acvf_correction =`) was unstable
+  under censoring. With drift regressors the bias map has a near-null
+  direction (roughly a constant offset across lags); without censoring the raw
+  autocovariance carries almost no noise along it, but censoring breaks the
+  constraint that guarantees this, and the exact solve amplified that noise:
+  phi RMSE 0.45 at 10% censoring for a truth of 0.4. Near-null directions are
+  now fixed by the short-memory assumption the truncated correction already
+  makes (autocovariance ~0 at the end of the lag budget); well-determined
+  directions are solved exactly, so well-conditioned designs are unaffected.
+  RMSE at 10% censoring 0.446 -> 0.072; without censoring 0.035 -> 0.020.
+* Parcel pooling estimated each parcel from its parcel-mean time series, whose
+  autocorrelation is dominated by whatever the voxels share. Parcels are now
+  fitted from their voxels' pooled autocovariance, like global/run pooling (a
+  single all-voxel parcel reproduces global pooling exactly). phi error against
+  the voxels' own lag-1 autocorrelation 0.061 -> 0.006, and with a shared slow
+  component 0.228 -> 0.007 (residual autocorrelation after whitening
+  0.129 -> 0.068). Multiscale pooling improves too: RMSE 0.062 -> 0.038.
+* The C++ stationarity/invertibility repair in single-series Hannan-Rissanen
+  mis-mapped coefficients when the highest-order coefficient was exactly zero
+  (`arma::roots()` drops it): (1.5, 0) became (-1, 0.67).
+* `afni_restricted_plan()` rejects negative `a`/`r1`/`r2`, as AFNI does,
+  instead of silently clamping them to 0. `vrt` (AFNI's signal-to-total
+  variance ratio) was documented but ignored; with `estimate_ma1 = FALSE` and
+  `vrt < 1` the plan is now the exact ARMA(p, p) equivalent of AR(p) plus white
+  noise (its autocorrelation is `vrt` times the AR one at every lag, matching
+  AFNI). With `estimate_ma1 = TRUE`, a `vrt < 1` warns that it is ignored.
+
+## New
+
+* Residual-bias correction is supported for `pooling = "parcel"` in
+  `fit_noise()` and `noise_acvf()` (RMSE 0.020 uncensored, 0.062 at 10%
+  censoring, matching global pooling).
+
+## Performance
+
+* `acvf_bias_matrix()` exploits the low rank of the residual projection:
+  O(L^2 n r) instead of O(L^2 n^2); 3.3 s -> 0.19 s at n = 800, identical to
+  1e-12.
+
 # fmriAR 0.4.0
 
 Validated with `tools/validation/accuracy_benchmark.R`, which runs the same
