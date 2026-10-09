@@ -83,7 +83,11 @@ hr_arma_R <- function(y, p, q,
     Ylags <- if (p > 0L) .lag_matrix(y, p) else matrix(numeric(0), n, 0L)
     Elags <- if (q > 0L) .lag_matrix(ehat, q) else matrix(numeric(0), n, 0L)
     m <- max(p, q)
-    idx <- seq.int(m + 1L, n)
+    # Skip the long-AR burn-in, where ehat is built from a truncated
+    # (zero-filled) history, when the series is long enough to afford it.
+    burn <- if (q > 0L) max(m, p_big + q) else m
+    if (n - burn < 10L * (p + q + 1L)) burn <- m
+    idx <- seq.int(burn + 1L, n)
     Z <- cbind(Ylags[idx, , drop = FALSE], Elags[idx, , drop = FALSE])
     z_y <- y[idx]
     if (nrow(Z) < (ncol(Z) + 1L)) stop("Not enough data for the requested (p,q)")
@@ -101,7 +105,7 @@ hr_arma_R <- function(y, p, q,
 
   list(phi = phi,
        theta = theta,
-       sigma2 = mean(ehat^2),
+       sigma2 = mean(ehat[idx]^2),
        p_big = p_big,
        iter = iter)
 }

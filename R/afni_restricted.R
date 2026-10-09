@@ -45,6 +45,30 @@
   as.integer(c(1L, which(diff(codes) != 0L) + 1L) - 1L)
 }
 
+# MA(1) for the additive-white-noise part of AFNI's restricted model, estimated
+# on the AR-filtered VOXELS, pooled. Fitting it on the filtered voxel-mean
+# series (as earlier versions did) measures whatever is shared across voxels
+# rather than the voxel-level noise being whitened. The first p frames of each
+# run are dropped because the AR filter has no pre-sample there.
+.afni_ma1_pooled <- function(resid_cols, phi, rs0) {
+  n <- nrow(resid_cols)
+  filt <- arma_whiten_inplace(resid_cols + 0, matrix(0, n, 0L),
+                              phi = phi, theta = numeric(0),
+                              run_starts = rs0, exact_first = FALSE,
+                              parallel = TRUE, n_threads = .n_threads())$Y
+  ends <- c(rs0[-1L], n)
+  units <- lapply(seq_along(rs0), function(i) {
+    first <- rs0[i] + 1L + length(phi)
+    rows <- if (first <= ends[i]) seq.int(first, ends[i]) else integer(0)
+    list(mat = filt[rows, , drop = FALSE], starts0 = 0L)
+  })
+  units <- units[vapply(units, function(u) nrow(u$mat) >= 10L, TRUE)]
+  if (!length(units)) return(NULL)
+  est <- suppressWarnings(.hr_arma_pooled(units, p = 0L, q = 1L))
+  if (!isTRUE(est$ok)) return(NULL)
+  as.numeric(est$theta)
+}
+
 #' Build an AFNI-style restricted AR plan from root parameters
 #'
 #' @param resid (n x v) residual matrix (used only if estimate_ma1=TRUE)
@@ -87,17 +111,9 @@ afni_restricted_plan <- function(resid, runs = NULL, parcels = NULL,
     # optional MA(1) estimation on AR residuals (global)
     if (isTRUE(estimate_ma1)) {
       rs0 <- .afni_run_starts0(runs, n)
-      ymean <- rowMeans(resid)  # global mean series
-      # AR residuals via C++ whitener with q=0
-      out <- arma_whiten_inplace(matrix(ymean, ncol = 1L),
-                                 matrix(0, nrow = n, ncol = 1L),
-                                 phi = phi, theta = numeric(0),
-                                 run_starts = rs0,
-                                 exact_first_ar1 = FALSE, parallel = FALSE)
-      s <- drop(out$Y)
-      est <- hr_arma_fit_cpp(s, p = 0L, q = 1L, p_big = 0L, iter = 0L)
-      if (isTRUE(est$ok) || is.null(est$ok)) {
-        plan$theta <- list(as.numeric(est$theta))
+      th <- .afni_ma1_pooled(as.matrix(resid), phi, rs0)
+      if (!is.null(th)) {
+        plan$theta <- list(th)
         plan$order["q"] <- 1L
       } else {
         plan$theta <- list(numeric(0))
@@ -133,15 +149,8 @@ afni_restricted_plan <- function(resid, runs = NULL, parcels = NULL,
 
     if (isTRUE(estimate_ma1)) {
       cols <- which(parcels == pid)
-      ymean <- if (length(cols) == 1L) resid[, cols] else rowMeans(resid[, cols, drop = FALSE])
-      out <- arma_whiten_inplace(matrix(ymean, ncol = 1L),
-                                 matrix(0, nrow = n, ncol = 1L),
-                                 phi = phi, theta = numeric(0),
-                                 run_starts = rs0,
-                                 exact_first_ar1 = FALSE, parallel = FALSE)
-      s <- drop(out$Y)
-      est <- hr_arma_fit_cpp(s, p = 0L, q = 1L, p_big = 0L, iter = 0L)
-      if (isTRUE(est$ok) || is.null(est$ok)) th_by[[key]] <- as.numeric(est$theta)
+      th <- .afni_ma1_pooled(as.matrix(resid)[, cols, drop = FALSE], phi, rs0)
+      if (!is.null(th)) th_by[[key]] <- th
     }
   }
 

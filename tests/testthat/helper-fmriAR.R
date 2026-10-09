@@ -42,12 +42,12 @@ ma_root_moduli <- function(theta) {
   Mod(polyroot(c(1, as.numeric(theta))))
 }
 
-do_whiten_Y <- function(y, phi, theta = numeric(), run_starts0 = 0L, exact_first_ar1 = FALSE, parallel = TRUE, X_cols = 2L) {
+do_whiten_Y <- function(y, phi, theta = numeric(), run_starts0 = 0L, exact_first = FALSE, parallel = TRUE, X_cols = 2L) {
   stopifnot(is.numeric(y), is.numeric(phi), is.numeric(theta))
   Y <- matrix(y, ncol = 1L)
   X <- matrix(rnorm(length(y) * X_cols), ncol = X_cols)
   # Call the Rcpp whitening (exported by the package)
   out <- fmriAR:::arma_whiten_inplace(Y, X, phi = phi, theta = theta, run_starts = as.integer(run_starts0),
-                                      exact_first_ar1 = exact_first_ar1, parallel = parallel)
+                                      exact_first = exact_first, parallel = parallel)
   as.numeric(out$Y[, 1L])
 }

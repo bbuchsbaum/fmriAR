@@ -482,8 +482,10 @@ test_that("inplace modification works correctly", {
   Y_copy <- test_data$Y
 
   # Test inplace modification
-  result_inplace <- whiten_apply(plan, test_data$X, test_data$Y,
-                                 inplace = TRUE, parallel = FALSE)
+  expect_warning(
+    result_inplace <- whiten_apply(plan, test_data$X, test_data$Y,
+                                   inplace = TRUE, parallel = FALSE),
+    "deprecated")
 
   # Test regular modification
   result_regular <- whiten_apply(plan, X_copy, Y_copy, parallel = FALSE)

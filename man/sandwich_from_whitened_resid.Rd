@@ -8,9 +8,10 @@ sandwich_from_whitened_resid(
   Xw,
   Yw,
   beta = NULL,
-  type = c("iid", "hc0"),
+  type = c("iid", "hc0", "hac"),
   df_mode = c("rankX", "n-p"),
-  runs = NULL
+  runs = NULL,
+  hac_lag = NULL
 )
 }
 \arguments{
@@ -20,14 +21,24 @@ sandwich_from_whitened_resid(
 
 \item{beta}{Optional coefficients (p x v); estimated if \code{NULL}.}
 
-\item{type}{Either "iid" (default) or "hc0" for a robust sandwich.}
+\item{type}{\code{"iid"} (default) assumes the whitened errors are white and
+homoskedastic. \code{"hc0"} is a heteroskedasticity-robust sandwich. \code{"hac"} is
+a Newey-West (Bartlett kernel) sandwich computed within runs, which stays
+valid when the noise model leaves some autocorrelation behind.}
 
 \item{df_mode}{Degrees-of-freedom mode: "rankX" (default) or "n-p".}
 
-\item{runs}{Optional run labels (reserved for future per-run scaling).}
+\item{runs}{Optional run labels (length \code{nrow(Xw)}). Used by \code{type = "hac"}
+so that no lag product spans a run boundary.}
+
+\item{hac_lag}{Bandwidth for \code{type = "hac"}. Defaults to
+\code{floor(4 * (n_run / 100)^(2/9))} using the median run length.}
 }
 \value{
-List containing standard errors, innovation variances, and XtX inverse.
+List containing standard errors, innovation variances, and XtX
+inverse. Coefficients that are not estimable because \code{Xw} is rank
+deficient get \code{NA} standard errors (and \code{NA} rows/columns in \code{XtX_inv}),
+following \code{\link[stats:lm]{stats::lm()}}.
 }
 \description{
 GLS standard errors from whitened residuals

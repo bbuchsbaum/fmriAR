@@ -11,7 +11,7 @@ test_that("HR ARMA(1,1) recovers coefficients and whitening yields near-white re
   expect_equal(as.numeric(res$sigma2), 1.0, tolerance = 0.15)
 
   # Whiten with estimated parameters; residuals should be close to white
-  yw <- do_whiten_Y(y, phi = res$phi, theta = res$theta, run_starts0 = 0L, exact_first_ar1 = FALSE, parallel = FALSE)
+  yw <- do_whiten_Y(y, phi = res$phi, theta = res$theta, run_starts0 = 0L, exact_first = FALSE, parallel = FALSE)
   ac <- as.numeric(stats::acf(yw, plot = FALSE, lag.max = 5L)$acf)[-1L]
   expect_lt(max(abs(ac)), 0.05)
 })

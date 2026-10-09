@@ -224,3 +224,80 @@ Rcpp::List yw_from_acvf_cpp(const NumericVector& gamma, int p) {
   return Rcpp::List::create(Rcpp::Named("phi") = phi,
                             Rcpp::Named("sigma2") = E_prev);
 }
+
+// Segment-respecting lag-product sums for a (pre-centred) matrix.
+// seg_id labels contiguous segments; a pair (t, t - lag) contributes only when
+// both lie in the same segment. Returns per-lag sums averaged over columns and
+// the pair counts, matching .pooled_acvf_segments() after centring.
+// [[Rcpp::export]]
+Rcpp::List pooled_acvf_seg_cpp(const NumericMatrix& mat,
+                               const IntegerVector& seg_id,
+                               int max_lag) {
+  const int n = mat.nrow();
+  const int v = mat.ncol();
+  if (seg_id.size() != n) stop("seg_id must have one entry per row");
+  if (max_lag < 0) max_lag = 0;
+  std::vector<int> seg_start(n, 0);
+  for (int t = 1; t < n; ++t) {
+    seg_start[t] = (seg_id[t] == seg_id[t - 1]) ? seg_start[t - 1] : t;
+  }
+  NumericVector num(max_lag + 1);
+  NumericVector pairs(max_lag + 1);
+  for (int t = 0; t < n; ++t) {
+    const int reach = std::min(max_lag, t - seg_start[t]);
+    for (int l = 0; l <= reach; ++l) pairs[l] += 1.0;
+  }
+  std::vector<double> acc(max_lag + 1, 0.0);
+  for (int j = 0; j < v; ++j) {
+    const double* x = &mat(0, j);
+    for (int t = 0; t < n; ++t) {
+      const int reach = std::min(max_lag, t - seg_start[t]);
+      const double xt = x[t];
+      for (int l = 0; l <= reach; ++l) acc[l] += xt * x[t - l];
+    }
+  }
+  if (v > 0) {
+    for (int l = 0; l <= max_lag; ++l) num[l] = acc[l] / static_cast<double>(v);
+  }
+  return Rcpp::List::create(Rcpp::Named("num") = num, Rcpp::Named("pairs") = pairs);
+}
+
+// Hannan-Rissanen normal equations summed over columns. Regressors are lags
+// 1..p of Y and lags 1..q of E; rows enter when their within-segment position
+// rel[t] >= start (start >= max(p, q) keeps every lag inside the segment).
+// [[Rcpp::export]]
+Rcpp::List hr_normal_eq_cpp(const NumericMatrix& Y,
+                            const NumericMatrix& E,
+                            const IntegerVector& rel,
+                            int p, int q, int start) {
+  const int n = Y.nrow();
+  const int v = Y.ncol();
+  const int k = p + q;
+  if (E.nrow() != n || E.ncol() != v) stop("Y and E must have the same shape");
+  if (rel.size() != n) stop("rel must have one entry per row");
+  if (start < std::max(p, q)) stop("start must be >= max(p, q)");
+  NumericMatrix G(k, k);
+  NumericVector b(k);
+  double yy = 0.0;
+  double rows = 0.0;
+  std::vector<double> z(k);
+  for (int j = 0; j < v; ++j) {
+    const double* y = &Y(0, j);
+    const double* e = &E(0, j);
+    for (int t = 0; t < n; ++t) {
+      if (rel[t] < start) continue;
+      for (int a = 0; a < p; ++a) z[a] = y[t - a - 1];
+      for (int a = 0; a < q; ++a) z[p + a] = e[t - a - 1];
+      const double yt = y[t];
+      yy += yt * yt;
+      if (j == 0) rows += 1.0;
+      for (int a = 0; a < k; ++a) {
+        b[a] += z[a] * yt;
+        for (int c = a; c < k; ++c) G(a, c) += z[a] * z[c];
+      }
+    }
+  }
+  for (int a = 0; a < k; ++a) for (int c = 0; c < a; ++c) G(a, c) = G(c, a);
+  return Rcpp::List::create(Rcpp::Named("G") = G, Rcpp::Named("b") = b,
+                            Rcpp::Named("yy") = yy, Rcpp::Named("rows") = rows);
+}
