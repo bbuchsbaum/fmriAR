@@ -36,8 +36,10 @@ same number of timepoints, the plan's own \code{censor} set is used.}
 
 \item{parcels}{Optional parcel labels (length = ncol(Y)) when using parcel plans.}
 
-\item{inplace}{Retained for backward compatibility. R's copy semantics mean
-the inputs are never modified; \code{TRUE} only makes the result invisible.}
+\item{inplace}{Deprecated and ignored. The inputs were never modified (R's
+copy-on-modify semantics prevent it safely), so \code{TRUE} only made the
+result invisible. Supplying it now warns; it will be removed in a future
+release.}
 
 \item{parallel}{Use OpenMP parallelism if available. The thread count can be
 capped with \code{options(fmriAR.max_threads = k)}.}

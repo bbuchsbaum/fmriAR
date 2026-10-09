@@ -581,8 +581,12 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 #'   contiguous run/censor segments.
 #' @param p AR order (integer or "auto" if method == "ar"). An explicit order
 #'   is honoured even when it exceeds `p_max`.
-#' @param q MA order (integer).
-#' @param p_max Maximum AR order when `p = "auto"`.
+#' @param q MA order (integer), or `"auto"` (ARMA only) to choose it by BIC
+#'   from `0:q_max`.
+#' @param p_max Maximum AR order when `p = "auto"`. For `method = "arma"`,
+#'   `p = "auto"` searches `0:p_max` jointly with the MA order by BIC on the
+#'   pooled Hannan--Rissanen regression.
+#' @param q_max Maximum MA order when `q = "auto"`.
 #' @param exact_first How [whiten_apply()] treats the start of each run or
 #'   post-censoring segment. `"ar1"` (default; the name is historical) applies
 #'   the exact stationary initialisation of the fitted AR/ARMA model, i.e. exact
@@ -681,6 +685,7 @@ fit_noise <- function(resid = NULL,
                       p = "auto",
                       q = 0L,
                       p_max = 6L,
+                      q_max = 2L,
                       exact_first = c("ar1", "none"),
                       pooling = c("global", "run", "parcel"),
                       parcels = NULL,
@@ -739,6 +744,19 @@ fit_noise <- function(resid = NULL,
     # automatic search. Capping here silently turned p = 8 into an AR(6).
     p_max <- max(as.integer(p_max), as.integer(p))
   }
+  if (!identical(q, "auto") &&
+      (length(q) != 1L || !is.numeric(q) || !is.finite(q) || q < 0 || q != trunc(q))) {
+    stop("'q' must be \"auto\" or a single non-negative whole number", call. = FALSE)
+  }
+  if (identical(q, "auto") && !identical(method, "arma")) {
+    stop("q = \"auto\" requires method = \"arma\"", call. = FALSE)
+  }
+  # Candidate ARMA orders: "auto" searches 0..p_max (AR) and 0..q_max (MA) by
+  # BIC on the pooled Hannan-Rissanen regression; a number fixes the order.
+  arma_grid <- list(
+    p = if (identical(p, "auto")) 0:as.integer(p_max) else as.integer(p),
+    q = if (identical(q, "auto")) 0:as.integer(q_max) else as.integer(q)
+  )
 
   n <- nrow(resid)
   if (n < 10) stop("series too short")
@@ -884,17 +902,17 @@ fit_noise <- function(resid = NULL,
       seg_id_ma <- cumsum(c(1L, as.integer(diff(valid_idx) > 1L)))
       unit <- list(mat = mat_valid,
                    starts0 = as.integer(which(!duplicated(seg_id_ma)) - 1L))
-      pp <- if (identical(p, "auto")) min(2L, p_max) else as.integer(p)
-      qq <- as.integer(q)
+      pp <- arma_grid$p
+      qq <- arma_grid$q
 
-      lag_ma <- max(1L, pp + qq)
+      lag_ma <- max(1L, max(pp) + max(qq))
       pooled_ma <- .pooled_acvf_segments(mat_valid, seg_id_ma, lag_ma)
       gamma_ma <- .acvf_from_pooled(pooled_ma, order = lag_ma)
 
       if (identical(pooling, "global")) {
         # Estimated once over all runs below.
         return(list(phi = numeric(0), theta = numeric(0),
-                    order = c(p = pp, q = qq), gamma = gamma_ma,
+                    order = c(p = max(pp), q = max(qq)), gamma = gamma_ma,
                     sigma2 = NA_real_, unit = unit))
       }
       fit <- .hr_arma_pooled(list(unit), pp, qq, iter = as.integer(hr_iter))
@@ -1119,8 +1137,8 @@ fit_noise <- function(resid = NULL,
       # One pooled Hannan-Rissanen fit over every run's segments.
       units <- lapply(estimates, `[[`, "unit")
       units <- units[!vapply(units, is.null, logical(1))]
-      pp <- if (identical(p, "auto")) min(2L, p_max) else as.integer(p)
-      fit <- .hr_arma_pooled(units, pp, as.integer(q), iter = as.integer(hr_iter))
+      fit <- .hr_arma_pooled(units, arma_grid$p, arma_grid$q,
+                             iter = as.integer(hr_iter))
       phi_pooled <- fit$phi
       theta_pooled <- fit$theta
       arma_sigma2 <- fit$sigma2
@@ -1210,8 +1228,10 @@ fit_noise <- function(resid = NULL,
 #'   each censored one. When omitted and the plan was fitted on data with the
 #'   same number of timepoints, the plan's own `censor` set is used.
 #' @param parcels Optional parcel labels (length = ncol(Y)) when using parcel plans.
-#' @param inplace Retained for backward compatibility. R's copy semantics mean
-#'   the inputs are never modified; `TRUE` only makes the result invisible.
+#' @param inplace Deprecated and ignored. The inputs were never modified (R's
+#'   copy-on-modify semantics prevent it safely), so `TRUE` only made the
+#'   result invisible. Supplying it now warns; it will be removed in a future
+#'   release.
 #' @param parallel Use OpenMP parallelism if available. The thread count can be
 #'   capped with `options(fmriAR.max_threads = k)`.
 #' @return List with whitened data. Parcel plans return `X_by` per parcel; others
@@ -1240,6 +1260,10 @@ fit_noise <- function(resid = NULL,
 whiten_apply <- function(plan, X, Y, runs = NULL, run_starts = NULL, censor = NULL, parcels = NULL,
                          inplace = FALSE, parallel = TRUE) {
   stopifnot(inherits(plan, "fmriAR_plan"))
+  if (!missing(inplace)) {
+    warning("whiten_apply(): 'inplace' is deprecated and ignored; the inputs ",
+            "are never modified. Use the returned list.", call. = FALSE)
+  }
   if (!is.matrix(X)) X <- as.matrix(X)
   if (!is.matrix(Y)) Y <- as.matrix(Y)
   if (anyNA(X) || anyNA(Y)) {
@@ -1329,7 +1353,6 @@ whiten_apply <- function(plan, X, Y, runs = NULL, run_starts = NULL, censor = NU
 
     out <- list(X = NULL, X_by = X_by, Y = Yw)
     if (!is.null(censor)) out$censor <- censor
-    if (inplace) return(invisible(out))
     return(out)
   }
 
@@ -1387,7 +1410,7 @@ whiten_apply <- function(plan, X, Y, runs = NULL, run_starts = NULL, censor = NU
 
   out <- list(X = Xw, Y = Yw)
   if (!is.null(censor)) out$censor <- censor
-  if (inplace) invisible(out) else out
+  out
 }
 
 #' Fit and apply whitening in one call

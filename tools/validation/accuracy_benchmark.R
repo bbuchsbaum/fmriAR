@@ -103,6 +103,43 @@ arma_scn("S4 ARMA(1,1)", 401)
 arma_scn("S5 ARMA(1,1) 20% censor", 501, censor_frac = 0.2)
 arma_scn("S6 ARMA(1,1) + shared signal", 601, shared = 0.4)
 
+# S6b: shared signal, orders chosen automatically. The noise is ARMA(1,1) plus
+# a shared AR(0.95), i.e. not ARMA(1,1), and the single shared realisation
+# keeps even the empirical voxel autocorrelation ~0.14 from the theoretical
+# one, so the attainable target is in-sample: how white the voxels end up and
+# how closely the fitted model tracks the voxels' own autocorrelation.
+set.seed(602)
+s6b <- t(replicate(30, {
+  R <- sim_arma(240, 30, 0.5, 0.4) +
+    0.4 * as.numeric(stats::filter(rnorm(240), 0.95, method = "recursive"))
+  pl <- tryCatch(fit_noise(R, method = "arma", p = "auto", q = "auto"),
+                 error = function(e) NULL)
+  if (is.null(pl)) return(c(NA, NA, NA))
+  ac_emp <- rowMeans(apply(R, 2, function(y) stats::acf(y, 10, plot = FALSE)$acf[-1]))
+  r <- stats::ARMAacf(pl$phi[[1]], pl$theta[[1]], 10)[-1]
+  w <- whiten_apply(pl, matrix(1, 240, 1), R)$Y
+  c(max(abs(r - ac_emp)), whiteness(w, rep(1, 240)),
+    length(pl$phi[[1]]) + length(pl$theta[[1]]))
+}))
+add("S6b ARMA auto orders + shared signal", "max|acf_fit - acf_voxels| lags 1-10", mean(s6b[, 1]))
+add("S6b ARMA auto orders + shared signal", "whitened mean|acf1..3|", mean(s6b[, 2]))
+add("S6b ARMA auto orders + shared signal", "p+q (mean)", mean(s6b[, 3]))
+
+# S6c: ARMA order recovery (truth (1,1), (0,0), (1,0)).
+for (cfg in list(list("S6c ARMA auto, truth (1,1)", 0.5, 0.4, c(1, 1)),
+                 list("S6c ARMA auto, truth (0,0)", numeric(0), numeric(0), c(0, 0)),
+                 list("S6c ARMA auto, truth (1,0)", 0.5, numeric(0), c(1, 0)))) {
+  set.seed(603)
+  ok <- replicate(30, {
+    R <- sim_arma(240, 30, cfg[[2]], cfg[[3]])
+    pl <- tryCatch(fit_noise(R, method = "arma", p = "auto", q = "auto"),
+                   error = function(e) NULL)
+    if (is.null(pl)) return(NA)
+    all(c(length(pl$phi[[1]]), length(pl$theta[[1]])) == cfg[[4]])
+  })
+  add(cfg[[1]], "P(correct order)", mean(ok))
+}
+
 # S7: GLS efficiency and calibration with short runs --------------------------
 set.seed(701)
 nr <- 4; L <- 60; n <- nr * L

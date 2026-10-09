@@ -83,7 +83,9 @@ test_that("whiten_apply inplace modifies matrices", {
   )
   Y_ref <- Y
   X_ref <- X
-  res_inplace <- whiten_apply(plan, X, Y, inplace = TRUE, parallel = FALSE)
+  expect_warning(
+    res_inplace <- whiten_apply(plan, X, Y, inplace = TRUE, parallel = FALSE),
+    "deprecated")
   res_regular <- whiten_apply(plan, X_ref, Y_ref, parallel = FALSE)
 
   expect_equal(res_inplace$Y, res_regular$Y)

@@ -14,6 +14,7 @@ fit_noise(
   p = "auto",
   q = 0L,
   p_max = 6L,
+  q_max = 2L,
   exact_first = c("ar1", "none"),
   pooling = c("global", "run", "parcel"),
   parcels = NULL,
@@ -55,9 +56,14 @@ contiguous run/censor segments.}
 \item{p}{AR order (integer or "auto" if method == "ar"). An explicit order
 is honoured even when it exceeds \code{p_max}.}
 
-\item{q}{MA order (integer).}
+\item{q}{MA order (integer), or \code{"auto"} (ARMA only) to choose it by BIC
+from \code{0:q_max}.}
 
-\item{p_max}{Maximum AR order when \code{p = "auto"}.}
+\item{p_max}{Maximum AR order when \code{p = "auto"}. For \code{method = "arma"},
+\code{p = "auto"} searches \code{0:p_max} jointly with the MA order by BIC on the
+pooled Hannan--Rissanen regression.}
+
+\item{q_max}{Maximum MA order when \code{q = "auto"}.}
 
 \item{exact_first}{How \code{\link[=whiten_apply]{whiten_apply()}} treats the start of each run or
 post-censoring segment. \code{"ar1"} (default; the name is historical) applies

@@ -293,8 +293,10 @@ test_that("fit_noise and whiten_apply cover remaining error and edge paths", {
   plan_p <- fit_noise(resid, pooling = "parcel", parcels = parcels,
                       method = "ar", p = 1L)
   Y_copy <- Y
-  out_in <- whiten_apply(plan_p, X, Y_copy, parcels = parcels,
-                         inplace = TRUE, parallel = FALSE)
+  expect_warning(
+    out_in <- whiten_apply(plan_p, X, Y_copy, parcels = parcels,
+                           inplace = TRUE, parallel = FALSE),
+    "deprecated")
   expect_true(is.null(out_in$X))
   expect_true(is.list(out_in$X_by))
   expect_equal(dim(out_in$Y), dim(Y))

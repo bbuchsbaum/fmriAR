@@ -411,3 +411,65 @@ test_that("compat$update_plan keeps the previous plan's censor and exact_first",
   expect_identical(upd$censor, cens)
   expect_false(upd$exact_first)
 })
+
+# --- ARMA order selection ------------------------------------------------------------
+
+test_that("ARMA p/q = 'auto' recovers the true order", {
+  set.seed(9126)
+  for (cfg in list(list(0.5, 0.4, c(1L, 1L)), list(numeric(0), numeric(0), c(0L, 0L)),
+                   list(0.5, numeric(0), c(1L, 0L)))) {
+    hits <- replicate(10, {
+      R <- sim_arma_mat(240, 30, cfg[[1]], cfg[[2]])
+      pl <- fit_noise(R, method = "arma", p = "auto", q = "auto")
+      identical(c(length(pl$phi[[1]]), length(pl$theta[[1]])), cfg[[3]]) &&
+        identical(unname(pl$order), cfg[[3]])
+    })
+    expect_gte(mean(hits), 0.8)
+  }
+  expect_error(fit_noise(sim_arma_mat(100, 2, 0.5), q = "auto"), "requires method")
+  expect_error(fit_noise(sim_arma_mat(100, 2, 0.5), method = "arma", q = -1), "'q' must be")
+})
+
+test_that("ARMA order selection whitens shared slow noise as well as a correct model", {
+  # ARMA(1,1) voxel noise plus a shared AR(0.95) component is not ARMA(1,1).
+  # Counting voxels at their effective number lets BIC take the richer model
+  # the data support; residual autocorrelation then matches the
+  # well-specified case instead of staying ~15% higher.
+  set.seed(9127)
+  white <- function(W) mean(abs(acorr_diagnostics(W, max_lag = 3)$acf))
+  r <- t(replicate(10, {
+    R <- sim_arma_mat(240, 30, 0.5, 0.4) +
+      0.4 * as.numeric(stats::filter(rnorm(240), 0.95, method = "recursive"))
+    fixed <- fit_noise(R, method = "arma", p = 1, q = 1)
+    auto <- fit_noise(R, method = "arma", p = "auto", q = "auto")
+    X1 <- matrix(1, 240, 1)
+    c(white(whiten_apply(fixed, X1, R)$Y), white(whiten_apply(auto, X1, R)$Y))
+  }))
+  expect_lt(mean(r[, 2]), mean(r[, 1]))
+})
+
+test_that(".effective_voxels follows the design effect", {
+  set.seed(9128)
+  indep <- list(list(mat = scale(matrix(rnorm(500 * 40), 500), scale = FALSE)))
+  expect_gt(.effective_voxels(indep), 30)
+  same <- list(list(mat = matrix(rnorm(500), 500, 40)))
+  expect_equal(.effective_voxels(same), 1)
+  # rbar = 0.5 -> V_eff = 40 / (1 + 39 * 0.5) ~ 1.95
+  sh <- rnorm(500)
+  half <- list(list(mat = sh + matrix(rnorm(500 * 40), 500)))
+  expect_equal(.effective_voxels(half), 40 / (1 + 39 * 0.5), tolerance = 0.2)
+})
+
+# --- deprecated arguments -------------------------------------------------------------
+
+test_that("whiten_apply(inplace =) is deprecated and never touches the inputs", {
+  set.seed(9129)
+  Y <- sim_arma_mat(80, 3, 0.5); X <- cbind(1, rnorm(80))
+  Y0 <- Y + 0; X0 <- X + 0
+  plan <- compat$plan_from_phi(0.5)
+  expect_warning(out <- whiten_apply(plan, X, Y, inplace = TRUE), "deprecated")
+  expect_identical(Y, Y0)
+  expect_identical(X, X0)
+  expect_equal(out, whiten_apply(plan, X, Y))
+  expect_silent(whiten_apply(plan, X, Y))
+})

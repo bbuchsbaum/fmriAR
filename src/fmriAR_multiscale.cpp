@@ -278,6 +278,8 @@ Rcpp::List hr_normal_eq_cpp(const NumericMatrix& Y,
   if (start < std::max(p, q)) stop("start must be >= max(p, q)");
   NumericMatrix G(k, k);
   NumericVector b(k);
+  double yy = 0.0;
+  double rows = 0.0;
   std::vector<double> z(k);
   for (int j = 0; j < v; ++j) {
     const double* y = &Y(0, j);
@@ -287,6 +289,8 @@ Rcpp::List hr_normal_eq_cpp(const NumericMatrix& Y,
       for (int a = 0; a < p; ++a) z[a] = y[t - a - 1];
       for (int a = 0; a < q; ++a) z[p + a] = e[t - a - 1];
       const double yt = y[t];
+      yy += yt * yt;
+      if (j == 0) rows += 1.0;
       for (int a = 0; a < k; ++a) {
         b[a] += z[a] * yt;
         for (int c = a; c < k; ++c) G(a, c) += z[a] * z[c];
@@ -294,5 +298,6 @@ Rcpp::List hr_normal_eq_cpp(const NumericMatrix& Y,
     }
   }
   for (int a = 0; a < k; ++a) for (int c = 0; c < a; ++c) G(a, c) = G(c, a);
-  return Rcpp::List::create(Rcpp::Named("G") = G, Rcpp::Named("b") = b);
+  return Rcpp::List::create(Rcpp::Named("G") = G, Rcpp::Named("b") = b,
+                            Rcpp::Named("yy") = yy, Rcpp::Named("rows") = rows);
 }

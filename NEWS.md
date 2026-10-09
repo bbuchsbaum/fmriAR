@@ -1,8 +1,19 @@
-# fmriAR (development version)
+# fmriAR 0.4.0
 
 Validated with `tools/validation/accuracy_benchmark.R`, which runs the same
 seeded scenarios against two installed versions; numbers below are 0.3.3 ->
 this version.
+
+## Breaking changes
+
+* `whiten_apply(inplace =)` is deprecated and ignored, with a warning. The
+  inputs were never modified (R's copy-on-modify semantics prevent doing so
+  safely), so the argument only made the result invisible.
+* `fit_noise(method = "arma", p = "auto")` now chooses the AR order by BIC
+  from `0:p_max` instead of always fitting AR order 2 (see below).
+* Results change where the fixes below say so: exact start-up for AR(p)/ARMA,
+  pooled ARMA estimation, per-voxel `acorr_diagnostics()`, the BIC penalty,
+  and `compat$whiten_with_phi(exact_first = TRUE)`.
 
 ## Fixes
 
@@ -62,6 +73,22 @@ this version.
 * Global AR pooling fits Yule-Walker on the frame-weighted average of the
   runs' autocorrelations rather than averaging per-run coefficients (identical
   for AR(1); slightly better for AR(p)).
+* ARMA orders can be selected automatically: `q = "auto"` (new `q_max`,
+  default 2) and `p = "auto"` search the order grid by BIC on the pooled
+  Hannan-Rissanen regression. All candidates are column subsets of one
+  regression, so selection costs one extra pass over the data. The BIC sample
+  size is frames times the effective number of independent voxels (Kish design
+  effect from the mean inter-voxel correlation): counting frames alone
+  under-fitted shared slow noise, counting every voxel over-fitted when voxels
+  share fluctuations. Order recovery: 100% for white noise and AR(1), 80% for
+  ARMA(1,1) (30 voxels x 240 frames).
+* ARMA(1,1) noise plus a shared slow AR(0.95) component is not an ARMA(1,1)
+  process, and the single shared realisation keeps even the empirical voxel
+  autocorrelation ~0.14 from the theoretical one, so no estimator can recover
+  "the" (1,1) parameters there. What can be fixed is how white the voxels end
+  up. Residual autocorrelation after whitening: 0.135 in 0.3.3, 0.061 with a
+  fixed (1,1) fit now, 0.055 with automatic orders, against 0.052 for a
+  correctly specified model.
 * Single-series Hannan-Rissanen skips the long-AR burn-in.
 * `sandwich_from_whitened_resid(type = "hac")`: Newey-West standard errors
   within runs, for when the noise model leaves autocorrelation behind.
