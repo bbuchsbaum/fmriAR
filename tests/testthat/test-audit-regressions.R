@@ -630,3 +630,221 @@ test_that("AFNI plans: negative poles rejected, vrt gives AFNI's correlations", 
   expect_warning(afni_restricted_plan(R, roots = list(a = 0.5, r1 = 0.6, t1 = 1, vrt = 0.5)),
                  "ignored")
 })
+
+# --- coverage of remaining audit items ----------------------------------------------------
+
+test_that("C++ segment lag sums match a plain R reference", {
+  # pooled_acvf_seg_cpp replaced an R loop; check it against first principles,
+  # including segments of length 1 and lags longer than any segment.
+  set.seed(9301)
+  M <- matrix(rnorm(40 * 3), 40, 3)
+  seg <- rep(c(1, 2, 3, 4), c(15, 1, 20, 4))
+  for (L in c(0L, 3L, 25L)) {
+    out <- pooled_acvf_seg_cpp(M, as.integer(seg), L)
+    ref_num <- ref_pairs <- numeric(L + 1L)
+    for (h in 0:L) for (t in seq_len(nrow(M))) {
+      s <- t - h
+      if (s >= 1 && seg[s] == seg[t]) {
+        ref_num[h + 1] <- ref_num[h + 1] + sum(M[t, ] * M[s, ]) / ncol(M)
+        ref_pairs[h + 1] <- ref_pairs[h + 1] + 1
+      }
+    }
+    expect_equal(as.numeric(out$num), ref_num, tolerance = 1e-12)
+    expect_equal(as.numeric(out$pairs), ref_pairs)
+  }
+})
+
+test_that("C++ Hannan-Rissanen normal equations match lm()", {
+  set.seed(9302)
+  n <- 60
+  Y <- matrix(rnorm(n * 2), n, 2); E <- matrix(rnorm(n * 2), n, 2)
+  rel <- c(0:29, 0:29)                      # two segments of 30
+  p <- 2L; q <- 1L; start <- 3L
+  ne <- hr_normal_eq_cpp(Y, E, as.integer(rel), p, q, start)
+  rows <- which(rel >= start)
+  Z <- do.call(rbind, lapply(1:2, function(j) cbind(Y[rows - 1, j], Y[rows - 2, j], E[rows - 1, j])))
+  y <- unlist(lapply(1:2, function(j) Y[rows, j]))
+  expect_equal(ne$G, crossprod(Z), tolerance = 1e-12)
+  expect_equal(as.numeric(ne$b), as.numeric(crossprod(Z, y)), tolerance = 1e-12)
+  expect_equal(ne$yy, sum(y^2), tolerance = 1e-12)
+  expect_equal(ne$rows, length(rows))
+  expect_equal(as.numeric(solve(ne$G, ne$b)), unname(coef(lm(y ~ Z - 1))), tolerance = 1e-10)
+  expect_error(hr_normal_eq_cpp(Y, E, as.integer(rel), p, q, 1L), "start")
+})
+
+test_that("censor validation rejects malformed input", {
+  R <- sim_arma_mat(50, 2, 0.3)
+  expect_error(fit_noise(R, censor = c(3, NA)), "whole-number")
+  expect_error(fit_noise(R, censor = 2.5), "whole-number")
+  expect_error(fit_noise(R, censor = c(TRUE, NA, rep(FALSE, 48))), "NA")
+  # Out-of-range indices are dropped, an empty set is no censoring.
+  expect_identical(fit_noise(R, p = 1, censor = c(0L, 999L))$phi,
+                   fit_noise(R, p = 1)$phi)
+})
+
+test_that("parcel whitening reports censored rows too", {
+  set.seed(9303)
+  R <- sim_arma_mat(80, 4, 0.4)
+  plan <- fit_noise(R, pooling = "parcel", parcels = c(1, 1, 2, 2), p = 1, censor = 20:21)
+  out <- whiten_apply(plan, matrix(1, 80, 1), R)
+  expect_identical(out$censor, 20:21)
+  ref <- whiten_apply(plan, matrix(1, 80, 1), R, censor = 20:21)
+  expect_identical(out$Y, ref$Y)
+})
+
+test_that("HAC lag products never cross a run boundary", {
+  set.seed(9304)
+  n <- 60; runs <- rep(1:2, each = 30)
+  X <- cbind(1, rnorm(n)); Y <- matrix(rnorm(n * 2), n, 2)
+  out <- sandwich_from_whitened_resid(X, Y, type = "hac", runs = runs, hac_lag = 3)
+  H <- solve(crossprod(X)) %*% t(X)
+  E <- Y - X %*% (H %*% Y)
+  ref <- vapply(1:2, function(j) {
+    vapply(1:2, function(k) {
+      u <- H[k, ] * E[, j]
+      v <- sum(u^2)
+      for (l in 1:3) {
+        hi <- (l + 1):n; lo <- 1:(n - l); ok <- runs[hi] == runs[lo]
+        v <- v + 2 * (1 - l / 4) * sum(u[hi[ok]] * u[lo[ok]])
+      }
+      sqrt(v)
+    }, 0)
+  }, numeric(2))
+  expect_equal(out$se, ref, tolerance = 1e-12)
+  # Ignoring runs gives a different answer.
+  expect_false(isTRUE(all.equal(
+    sandwich_from_whitened_resid(X, Y, type = "hac", hac_lag = 3)$se, ref)))
+})
+
+test_that("compat$whiten_with_phi uses the exact start by default", {
+  set.seed(9305)
+  Y <- sim_arma_mat(40, 2, 0.6); X <- matrix(1, 40, 1)
+  out <- compat$whiten_with_phi(X, Y, phi = 0.6)
+  expect_equal(out$Y[1, ], Y[1, ] * sqrt(1 - 0.36))
+  out0 <- compat$whiten_with_phi(X, Y, phi = 0.6, exact_first = FALSE)
+  expect_equal(out0$Y[1, ], Y[1, ])
+})
+
+test_that("pooled ARMA falls back to white noise, with a warning, when it cannot fit", {
+  units <- list(list(mat = matrix(rnorm(6), 3, 2), starts0 = 0L))
+  expect_warning(fit <- .hr_arma_pooled(units, 1L, 1L), "white-noise")
+  expect_false(fit$ok)
+  expect_equal(fit$phi, 0); expect_equal(fit$theta, 0)
+})
+
+test_that("end-to-end GLS keeps nominal false-positive rates", {
+  # The whole pipeline -- residuals, noise fit, exact whitening, iid SEs --
+  # must give calibrated t-tests for a null task effect. Short runs make the
+  # start-up handling and order selection matter.
+  skip_on_cran()
+  set.seed(9306)
+  nr <- 4; L <- 60; n <- nr * L
+  runs <- rep(seq_len(nr), each = L)
+  task <- rep(rep(c(0, 1), each = 10), length.out = L)
+  X <- cbind(task = rep(task, nr), model.matrix(~ factor(runs) - 1))
+  for (model in list(list(c(0.6, 0.2), numeric(0), "ar"), list(0.7, 0.5, "arma"))) {
+    tt <- unlist(lapply(1:60, function(i) {
+      R <- do.call(rbind, lapply(seq_len(nr), function(r) sim_arma_mat(L, 20, model[[1]], model[[2]])))
+      res0 <- R - X %*% qr.solve(X, R)
+      pl <- if (model[[3]] == "ar") fit_noise(res0, runs = runs, p = "auto") else
+        fit_noise(res0, runs = runs, method = "arma", p = "auto", q = "auto")
+      w <- whiten_apply(pl, X, R, runs = runs)
+      s <- sandwich_from_whitened_resid(w$X, w$Y)
+      qr.solve(w$X, w$Y)[1, ] / s$se[1, ]
+    }))
+    rate <- mean(abs(tt) > 1.96)
+    expect_gt(rate, 0.03, label = model[[3]])
+    expect_lt(rate, 0.075, label = model[[3]])
+  }
+})
+
+test_that("Hannan-Rissanen refinement iterations run and stay accurate", {
+  set.seed(9307)
+  R <- sim_arma_mat(400, 20, 0.5, 0.4)
+  p0 <- fit_noise(R, method = "arma", p = 1, q = 1, hr_iter = 0)
+  p2 <- fit_noise(R, method = "arma", p = 1, q = 1, hr_iter = 2)
+  expect_false(identical(p0$theta, p2$theta))       # the iteration did something
+  expect_lt(abs(p2$phi[[1]] - 0.5), 0.08)
+  expect_lt(abs(p2$theta[[1]] - 0.4), 0.08)
+})
+
+test_that("ARMA(0, 0) gives a white plan with voxel-scale variance", {
+  set.seed(9308)
+  R <- matrix(rnorm(300 * 10, sd = 2), 300, 10)
+  pl <- fit_noise(R, method = "arma", p = 0, q = 0)
+  expect_length(pl$phi[[1]], 0L); expect_length(pl$theta[[1]], 0L)
+  expect_equal(pl$sigma2[[1]], 4, tolerance = 0.1)
+  expect_equal(whiten_apply(pl, matrix(1, 300, 1), R)$Y, R)
+})
+
+test_that("default HAC bandwidth follows the Newey-West rule on run length", {
+  set.seed(9309)
+  X <- cbind(1, rnorm(200)); Y <- matrix(rnorm(200), 200, 1)
+  out <- sandwich_from_whitened_resid(X, Y, type = "hac", runs = rep(1:2, each = 100))
+  expect_equal(out$hac_lag, floor(4 * (100 / 100)^(2 / 9)))
+  expect_equal(out$se, sandwich_from_whitened_resid(X, Y, type = "hac", runs = rep(1:2, each = 100),
+                                                    hac_lag = out$hac_lag)$se)
+})
+
+test_that("AFNI spec validation and the white-noise limit", {
+  R <- matrix(rnorm(100 * 2), 100)
+  expect_error(afni_restricted_plan(R, roots = list(a = 0.5, r1 = 0.3)), "missing: t1")
+  expect_error(afni_restricted_plan(R, roots = list(a = 0.5, r1 = NA, t1 = 1)), "finite")
+  expect_error(afni_restricted_plan(R, roots = list(a = 0.5, r1 = 0.3, t1 = 1, vrt = 0)), "vrt")
+  pl <- afni_restricted_plan(R, roots = list(a = 0.5, r1 = 0.3, t1 = 1, vrt = 0.005),
+                             estimate_ma1 = FALSE)
+  expect_length(pl$phi[[1]], 0L)                     # AFNI treats vrt <= 0.01 as white
+})
+
+test_that("acvf_pooled with p = 'auto' returns white filters for white noise", {
+  set.seed(9310)
+  R <- matrix(rnorm(300 * 32), 300, 32)
+  ps <- list(coarse = rep(1:2, each = 16), medium = rep(1:4, each = 8), fine = rep(1:8, each = 4))
+  pl <- fit_noise(R, pooling = "parcel", parcels = ps$fine, parcel_sets = ps,
+                  p = "auto", multiscale = "acvf_pooled")
+  expect_equal(pl$order[["p"]], 0L)
+  expect_true(all(vapply(pl$phi_by_parcel, length, 0L) == 0L))
+})
+
+test_that("arma_whiten_void matches arma_whiten_inplace", {
+  set.seed(9311)
+  Y <- matrix(rnorm(50 * 3), 50); X <- matrix(rnorm(50 * 2), 50)
+  ref <- arma_whiten_inplace(Y + 0, X + 0, c(0.5, 0.2), 0.3, c(0L, 20L), TRUE, FALSE)
+  Y2 <- Y + 0; X2 <- X + 0
+  arma_whiten_void(Y2, X2, c(0.5, 0.2), 0.3, c(0L, 20L), TRUE, FALSE)
+  expect_identical(Y2, ref$Y); expect_identical(X2, ref$X)
+  expect_error(arma_whiten_void(Y + 0, X + 0, 0.5, numeric(0), c(0L, 60L)), "out of bounds")
+})
+
+test_that("malformed designs and fully censored data are refused", {
+  R <- sim_arma_mat(60, 3, 0.3)
+  X <- cbind(1, rnorm(60)); X[5, 2] <- NA
+  expect_error(acvf_bias_matrix(X), "NA")
+  expect_error(noise_acvf(R, censor = 1:60, pooling = "parcel", parcels = 1:3), "no valid")
+  expect_error(fit_noise(R, censor = 1:60, p = 1), "no valid")
+})
+
+test_that("AR order selection counts pooled voxels at their effective number", {
+  # BIC on frames alone treated 60 pooled voxels as one series' worth of
+  # evidence: an AR(2) with phi = (0.5, -0.2) came back AR(1) and left
+  # residual autocorrelation behind.
+  set.seed(9312)
+  ord <- replicate(15, {
+    R <- sim_arma_mat(240, 60, c(0.5, -0.2))
+    fit_noise(R, runs = rep(1:2, each = 120), pooling = "run", p = "auto")$order[["p"]]
+  })
+  expect_true(all(ord == 2L))
+  # Independent AR(1) voxels: no material over-selection.
+  ord1 <- replicate(15, fit_noise(sim_arma_mat(300, 30, 0.5), p = "auto")$order[["p"]])
+  expect_lte(mean(ord1 != 1L), 0.1)
+  # The shortcut used in the estimators equals the reference design effect.
+  M <- matrix(rnorm(300 * 40), 300) + rnorm(300) * 0.7
+  g <- rep(1:2, each = 150)
+  units <- lapply(split(1:300, g), function(r) {
+    m <- M[r, ]; list(mat = m - rep(colMeans(m), each = nrow(m)))
+  })
+  pl <- .pooled_acvf_segments(M, g, 0L, center_id = g)
+  expect_equal(.bic_n(M, 1000, g), 1000 * .effective_voxels(units))
+  expect_equal(.bic_n(M, 1000, g, vbar = pl$num[1]), 1000 * .effective_voxels(units))
+  expect_equal(.bic_n(M[, 1, drop = FALSE], 1000), 1000)   # one voxel: frames only
+})

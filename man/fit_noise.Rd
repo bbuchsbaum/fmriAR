@@ -59,7 +59,11 @@ is honoured even when it exceeds \code{p_max}.}
 \item{q}{MA order (integer), or \code{"auto"} (ARMA only) to choose it by BIC
 from \code{0:q_max}.}
 
-\item{p_max}{Maximum AR order when \code{p = "auto"}. For \code{method = "arma"},
+\item{p_max}{Maximum AR order when \code{p = "auto"}. The order is chosen by
+BIC whose sample size is the number of frames times the effective number
+of independent voxels (a design effect from the mean inter-voxel
+correlation), so pooling many independent voxels can support a higher
+order than one series would. For \code{method = "arma"},
 \code{p = "auto"} searches \code{0:p_max} jointly with the MA order by BIC on the
 pooled Hannan--Rissanen regression.}
 

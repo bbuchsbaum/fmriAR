@@ -22,3 +22,4 @@
 ^\.vscode$
 ^Rplots\.pdf$
 ^tools$
+^src/.*\.gc(da|no|ov)$
