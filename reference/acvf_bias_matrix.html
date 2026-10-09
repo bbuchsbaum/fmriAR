@@ -15,7 +15,7 @@ A gamma = gamma_raw removes that bias."></head><body>
 
     <a class="navbar-brand me-2" href="../index.html">fmriAR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.4.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.4.1</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -95,13 +95,21 @@ cache the matrices when many datasets share one design and segmentation and
 feed them back as <code>acvf_correction</code>.</p>
 <p>One matrix is returned per run, because <code><a href="fit_noise.html">fit_noise()</a></code> estimates each run
 separately and the residual operator restricted to a run still involves the
-whole design.</p>
+whole design. Under <code>pooling = "parcel"</code>, which pools lag products across
+runs, the run matrices are combined in proportion to the lag pairs each run
+contributes.</p>
+<p>Projecting out run means and slow drift leaves the map with near-null
+directions (roughly a constant offset across lags). When the correction is
+applied, those directions are fixed by the same short-memory assumption the
+truncated system already makes (the autocovariance is near zero at the end
+of the budget) rather than taken from the data, which keeps the correction
+stable under censoring.</p>
 <p>The correction is exact for noise whose autocovariance dies within <code>max_lag</code>.
 Under long memory it is partial, since truncating the system aliases in
 structure past the budget. With high-pass filtering (DCT, 128 s) a budget
 near 20-25 lags is typically enough; without high-pass it exceeds 150 and the
 approach stops being practical.</p>
-<p>Cost is <code>O(max_lag^2 * n_valid * n)</code> per run, so it is worth caching.</p>
+<p>Cost is <code>O(max_lag^2 * n_valid * r)</code> per run for a design of rank <code>r</code>.</p>
     </div>
     <div class="section level2">
     <h2 id="see-also">See also<a class="anchor" aria-label="anchor" href="#see-also"></a></h2>

@@ -7,7 +7,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">fmriAR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.4.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.4.1</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -78,11 +78,20 @@
 <dd><p>either a single list with elements named as needed
 - for p=3: list(a, r1, t1, vrt = 1.0)
 - for p=5: list(a, r1, t1, r2, t2, vrt = 1.0)
-or a named list of such lists keyed by parcel id (character) for per-parcel specs.</p></dd>
+or a named list of such lists keyed by parcel id (character) for per-parcel specs.
+As in AFNI, <code>a</code>, <code>r1</code>, <code>r2</code> must be non-negative (values above 0.95
+are clamped to 0.95) and angles are clamped to <code>[0, pi]</code>. <code>vrt</code> is
+AFNI's signal-to-total variance ratio <code>s^2 / (s^2 + w^2)</code> for additive
+white noise <code>w</code>; it is used when <code>estimate_ma1 = FALSE</code>.</p></dd>
 
 
 <dt id="arg-estimate-ma-">estimate_ma1<a class="anchor" aria-label="anchor" href="#arg-estimate-ma-"></a></dt>
-<dd><p>logical, if TRUE estimate MA(1) on AR residuals to mimic AFNI's additive white</p></dd>
+<dd><p>logical. If <code>TRUE</code>, estimate an MA(1) term from the
+AR-filtered voxels to stand in for AFNI's additive white noise (<code>vrt</code> is
+then ignored). If <code>FALSE</code>, the white-noise share is taken from <code>vrt</code>: for
+<code>vrt &lt; 1</code> the plan is the exact ARMA(p, p) equivalent of AR(p) plus white
+noise, so its autocorrelation is <code>vrt</code> times the AR autocorrelation at
+every non-zero lag; <code>vrt = 1</code> (default) gives the pure AR(p).</p></dd>
 
 
 <dt id="arg-exact-first">exact_first<a class="anchor" aria-label="anchor" href="#arg-exact-first"></a></dt>

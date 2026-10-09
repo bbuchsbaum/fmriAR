@@ -20,7 +20,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">fmriAR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.4.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.4.1</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -297,10 +297,10 @@ parcel pooling: each parcel gets a filter matched to its own noise.</p>
 <code class="sourceCode R"><span><span class="co"># Per-parcel AR coefficients, and confirmation that whitening changed the data</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/utils/head.html" class="external-link">head</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/lapply.html" class="external-link">sapply</a></span><span class="op">(</span><span class="va">plan_parcel</span><span class="op">$</span><span class="va">phi_by_parcel</span>, <span class="kw">function</span><span class="op">(</span><span class="va">p</span><span class="op">)</span> <span class="fu"><a href="https://rdrr.io/r/base/Round.html" class="external-link">round</a></span><span class="op">(</span><span class="va">p</span>, <span class="fl">3</span><span class="op">)</span><span class="op">)</span><span class="op">[</span>, <span class="fl">1</span><span class="op">:</span><span class="fl">4</span><span class="op">]</span><span class="op">)</span></span>
 <span><span class="co">#           1      2      3      4</span></span>
-<span><span class="co"># [1,]  0.474  0.472  0.496  0.483</span></span>
-<span><span class="co"># [2,] -0.134 -0.136 -0.190 -0.193</span></span>
+<span><span class="co"># [1,]  0.506  0.510  0.485  0.477</span></span>
+<span><span class="co"># [2,] -0.189 -0.176 -0.178 -0.183</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/Extremes.html" class="external-link">max</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/MathFun.html" class="external-link">abs</a></span><span class="op">(</span><span class="va">whitened_parcel</span><span class="op">$</span><span class="va">Y</span> <span class="op">-</span> <span class="va">Y</span><span class="op">)</span><span class="op">)</span></span>
-<span><span class="co"># [1] 2.224597</span></span></code></pre></div>
+<span><span class="co"># [1] 2.350204</span></span></code></pre></div>
 </div>
 <div class="section level2">
 <h2 id="fitting-arma-models">Fitting ARMA models<a class="anchor" aria-label="anchor" href="#fitting-arma-models"></a>

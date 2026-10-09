@@ -259,10 +259,10 @@ parcel pooling: each parcel gets a filter matched to its own noise.
 # Per-parcel AR coefficients, and confirmation that whitening changed the data
 head(sapply(plan_parcel$phi_by_parcel, function(p) round(p, 3))[, 1:4])
 #           1      2      3      4
-# [1,]  0.474  0.472  0.496  0.483
-# [2,] -0.134 -0.136 -0.190 -0.193
+# [1,]  0.506  0.510  0.485  0.477
+# [2,] -0.189 -0.176 -0.178 -0.183
 max(abs(whitened_parcel$Y - Y))
-# [1] 2.224597
+# [1] 2.350204
 ```
 
 ## Fitting ARMA models

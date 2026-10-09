@@ -7,7 +7,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">fmriAR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.4.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.4.1</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -181,7 +181,9 @@ to be the one that actually formed the OLS residuals. A numerical
 orthogonality check rejects detectable mismatches, including typical raw,
 GLS, robust, or unrelated residuals. Orthogonality cannot prove the exact
 residual-forming provenance, so the caller remains responsible for
-supplying the matching design. Currently supported for <code>pooling = "global"</code> and <code>"run"</code> with <code>method = "ar"</code>.</p></dd>
+supplying the matching design. Supported for every pooling mode with
+<code>method = "ar"</code>; under <code>pooling = "parcel"</code> the per-run bias maps are
+combined in proportion to the lag pairs each run contributes.</p></dd>
 
 
 <dt id="arg-acvf-correction">acvf_correction<a class="anchor" aria-label="anchor" href="#arg-acvf-correction"></a></dt>

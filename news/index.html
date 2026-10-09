@@ -7,7 +7,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">fmriAR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.4.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.4.1</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -36,6 +36,27 @@
       <small>Source: <a href="https://github.com/bbuchsbaum/fmriAR/blob/main/NEWS.md" class="external-link"><code>NEWS.md</code></a></small>
     </div>
 
+    <div class="section level2">
+<h2 class="pkg-version" data-toc-text="0.4.1" id="fmriar-041">fmriAR 0.4.1<a class="anchor" aria-label="anchor" href="#fmriar-041"></a></h2>
+<p>Numbers are 0.4.0 -&gt; 0.4.1 from <code>tools/validation/accuracy_benchmark.R</code>; every metric not listed is unchanged.</p>
+<div class="section level3">
+<h3 id="fixes-0-4-1">Fixes<a class="anchor" aria-label="anchor" href="#fixes-0-4-1"></a></h3>
+<ul><li>Residual-bias correction (<code>design =</code> / <code>acvf_correction =</code>) was unstable under censoring. With drift regressors the bias map has a near-null direction (roughly a constant offset across lags); without censoring the raw autocovariance carries almost no noise along it, but censoring breaks the constraint that guarantees this, and the exact solve amplified that noise: phi RMSE 0.45 at 10% censoring for a truth of 0.4. Near-null directions are now fixed by the short-memory assumption the truncated correction already makes (autocovariance ~0 at the end of the lag budget); well-determined directions are solved exactly, so well-conditioned designs are unaffected. Near-null means small relative to the median singular value, so designs that leave few residual degrees of freedom (where the whole spectrum is small) still get the exact solve. RMSE at 10% censoring 0.446 -&gt; 0.072; without censoring 0.035 -&gt; 0.020.</li>
+<li>Parcel pooling estimated each parcel from its parcel-mean time series, whose autocorrelation is dominated by whatever the voxels share. Parcels are now fitted from their voxels’ pooled autocovariance, like global/run pooling (a single all-voxel parcel reproduces global pooling exactly). phi error against the voxels’ own lag-1 autocorrelation 0.061 -&gt; 0.006, and with a shared slow component 0.228 -&gt; 0.007 (residual autocorrelation after whitening 0.129 -&gt; 0.068). Multiscale pooling improves too: RMSE 0.062 -&gt; 0.038.</li>
+<li>The C++ stationarity/invertibility repair in single-series Hannan-Rissanen mis-mapped coefficients when the highest-order coefficient was exactly zero (<code>arma::roots()</code> drops it): (1.5, 0) became (-1, 0.67).</li>
+<li>
+<code><a href="../reference/afni_restricted_plan.html">afni_restricted_plan()</a></code> rejects negative <code>a</code>/<code>r1</code>/<code>r2</code>, as AFNI does, instead of silently clamping them to 0. <code>vrt</code> (AFNI’s signal-to-total variance ratio) was documented but ignored; with <code>estimate_ma1 = FALSE</code> and <code>vrt &lt; 1</code> the plan is now the exact ARMA(p, p) equivalent of AR(p) plus white noise (its autocorrelation is <code>vrt</code> times the AR one at every lag, matching AFNI). With <code>estimate_ma1 = TRUE</code>, a <code>vrt &lt; 1</code> warns that it is ignored.</li>
+</ul></div>
+<div class="section level3">
+<h3 id="new-0-4-1">New<a class="anchor" aria-label="anchor" href="#new-0-4-1"></a></h3>
+<ul><li>Residual-bias correction is supported for <code>pooling = "parcel"</code> in <code><a href="../reference/fit_noise.html">fit_noise()</a></code> and <code><a href="../reference/noise_acvf.html">noise_acvf()</a></code> (RMSE 0.020 uncensored, 0.062 at 10% censoring, matching global pooling).</li>
+</ul></div>
+<div class="section level3">
+<h3 id="performance-0-4-1">Performance<a class="anchor" aria-label="anchor" href="#performance-0-4-1"></a></h3>
+<ul><li>
+<code><a href="../reference/acvf_bias_matrix.html">acvf_bias_matrix()</a></code> exploits the low rank of the residual projection: O(L^2 n r) instead of O(L^2 n^2); 3.3 s -&gt; 0.19 s at n = 800, identical to 1e-12.</li>
+</ul></div>
+</div>
     <div class="section level2">
 <h2 class="pkg-version" data-toc-text="0.4.0" id="fmriar-040">fmriAR 0.4.0<a class="anchor" aria-label="anchor" href="#fmriar-040"></a></h2>
 <p>Validated with <code>tools/validation/accuracy_benchmark.R</code>, which runs the same seeded scenarios against two installed versions; numbers below are 0.3.3 -&gt; this version.</p>

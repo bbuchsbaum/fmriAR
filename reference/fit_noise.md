@@ -150,8 +150,10 @@ fit_noise(
   numerical orthogonality check rejects detectable mismatches, including
   typical raw, GLS, robust, or unrelated residuals. Orthogonality cannot
   prove the exact residual-forming provenance, so the caller remains
-  responsible for supplying the matching design. Currently supported for
-  `pooling = "global"` and `"run"` with `method = "ar"`.
+  responsible for supplying the matching design. Supported for every
+  pooling mode with `method = "ar"`; under `pooling = "parcel"` the
+  per-run bias maps are combined in proportion to the lag pairs each run
+  contributes.
 
 - acvf_correction:
 
