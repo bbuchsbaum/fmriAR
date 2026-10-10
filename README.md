@@ -3,6 +3,8 @@
 <!-- badges: start -->
 [![CRAN status](https://www.r-pkg.org/badges/version/fmriAR)](https://CRAN.R-project.org/package=fmriAR)
 [![R-CMD-check](https://github.com/bbuchsbaum/fmriAR/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/bbuchsbaum/fmriAR/actions/workflows/R-CMD-check.yaml)
+[![test-coverage](https://github.com/bbuchsbaum/fmriAR/actions/workflows/test-coverage.yaml/badge.svg)](https://github.com/bbuchsbaum/fmriAR/actions/workflows/test-coverage.yaml)
+[![Codecov test coverage](https://codecov.io/gh/bbuchsbaum/fmriAR/branch/main/graph/badge.svg)](https://app.codecov.io/gh/bbuchsbaum/fmriAR?branch=main)
 <!-- badges: end -->
 
 Fast AR and ARMA prewhitening for fMRI GLM workflows. Estimate a noise model
