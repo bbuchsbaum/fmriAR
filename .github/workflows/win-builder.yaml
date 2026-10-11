@@ -1,0 +1,40 @@
+# Builds the source package and uploads it to win-builder (R-devel and
+# R-release). Results are emailed to the maintainer in DESCRIPTION.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/win-builder.yaml
+
+name: win-builder
+
+permissions: read-all
+
+jobs:
+  win-builder:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-pandoc@v2
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: release
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          needs: build
+
+      - name: Build source package
+        run: R CMD build .
+
+      - name: Upload to win-builder
+        run: |
+          tarball=$(ls fmriAR_*.tar.gz)
+          echo "Uploading $tarball"
+          for dir in R-devel R-release; do
+            curl --fail --retry 3 -T "$tarball" "ftp://win-builder.r-project.org/$dir/"
+            echo "Uploaded to $dir"
+          done
