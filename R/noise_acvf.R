@@ -33,6 +33,10 @@
 #'   projection bias when `design` is supplied. This is independent of
 #'   `max_lag`: correction needs enough tail information even when only a few
 #'   output lags are requested.
+#' @param data_norm Optional norm of the data `resid` was computed from, one
+#'   number or one per column, so the orthogonality check can accept
+#'   residuals of a design that fits the data almost exactly; see
+#'   [fit_noise()]. Ignored unless `design` is supplied.
 #' @return An object of class `fmriAR_acvf`: a list with
 #'   \itemize{
 #'     \item `acvf`: named list of autocovariance vectors, lags 0 upward.
@@ -52,7 +56,8 @@
 #' @export
 noise_acvf <- function(resid, runs = NULL, censor = NULL, max_lag = 20L,
                        pooling = c("global", "run", "parcel"), parcels = NULL,
-                       design = NULL, correction_max_lag = 25L) {
+                       design = NULL, correction_max_lag = 25L,
+                       data_norm = NULL) {
   pooling <- match.arg(pooling)
   if (!is.matrix(resid)) resid <- as.matrix(resid)
   storage.mode(resid) <- "double"
@@ -68,7 +73,8 @@ noise_acvf <- function(resid, runs = NULL, censor = NULL, max_lag = 20L,
   } else {
     correction_lag <- .lag_budget(correction_max_lag,
                                   "correction_max_lag", 1, n)
-    .validate_design_residuals(resid, design)
+    .validate_design_residuals(resid, design,
+                               data_norm = .data_norm_total(data_norm, ncol(resid)))
     .drop_unusable_corrections(
       .acvf_bias_by_run(design, n, runs = runs, censor = censor,
                         max_lag = correction_lag))
