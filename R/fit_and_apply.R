@@ -688,11 +688,16 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 #'   hence into `phi`. Opt-in, because it changes estimates and needs the design
 #'   to be the one that actually formed the OLS residuals. A numerical
 #'   orthogonality check rejects detectable mismatches, including typical raw,
-#'   GLS, robust, or unrelated residuals. Orthogonality cannot prove the exact
-#'   residual-forming provenance, so the caller remains responsible for
-#'   supplying the matching design. Supported for every pooling mode with
-#'   `method = "ar"`; under `pooling = "parcel"` the per-run bias maps are
-#'   combined in proportion to the lag pairs each run contributes.
+#'   GLS, robust, or unrelated residuals. Directions an ill-conditioned design
+#'   barely determines (singular values below 1e-6 of the largest) are left
+#'   out of the check, since solvers disagree on whether they belong to the
+#'   fit; for a fit at a lower rank than `design`, passing a basis of the
+#'   fitted column space makes the correction exact. Orthogonality cannot
+#'   prove the exact residual-forming provenance, so the caller remains
+#'   responsible for supplying the matching design. Supported for every
+#'   pooling mode with `method = "ar"`; under `pooling = "parcel"` the per-run
+#'   bias maps are combined in proportion to the lag pairs each run
+#'   contributes.
 #' @param acvf_correction Precomputed bias matrices from [acvf_bias_matrix()],
 #'   as an alternative to `design` when many datasets share one design. A single
 #'   matrix is applied to every run; a list is matched against the runs in
@@ -704,6 +709,16 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 #'   solved. A design leaving fewer residual degrees of freedom than the budget
 #'   also cannot support it, and the budget is reduced accordingly, again with a
 #'   warning. Ignored unless `design` is supplied.
+#' @param data_norm Optional norm of the data `resid` was computed from: one
+#'   number for the whole matrix (`sqrt(sum(Y^2))`) or one per column
+#'   (`sqrt(colSums(Y^2))`). It gives the orthogonality check behind `design`
+#'   a scale for residuals the design explains almost exactly. Those residuals
+#'   are floating-point error, and unless they come from the same QR
+#'   factorisation the check uses, they are not orthogonal to the design
+#'   relative to their own size. With `data_norm`, a projection below
+#'   `sqrt(.Machine$double.eps) * data_norm` is accepted as rounding error.
+#'   Computed from `Y` when the residuals are formed from `Y` and `X`. Ignored
+#'   unless `design` is supplied.
 #' @param parallel Reserved for future parallel estimation (logical).
 #' @return An object of class `fmriAR_plan` used by [whiten_apply()]. Besides the
 #'   AR/MA coefficients the plan carries the noise scale and shape it was fitted
@@ -780,6 +795,7 @@ fit_noise <- function(resid = NULL,
                       design = NULL,
                       acvf_correction = NULL,
                       correction_max_lag = 25L,
+                      data_norm = NULL,
                       parallel = FALSE) {
 
   if (is.null(resid)) {
@@ -789,6 +805,9 @@ fit_noise <- function(resid = NULL,
       stopifnot(nrow(Y) == nrow(X))
       coef <- qr.solve(X, Y)
       resid <- Y - X %*% coef
+      # These residuals carry solver error of order eps * norm(Y); the design
+      # check needs that scale when X explains a column of Y almost exactly.
+      if (is.null(data_norm)) data_norm <- sqrt(colSums(Y * Y))
     } else {
       stop("fit_noise: supply 'resid' or both 'Y' and 'X'")
     }
@@ -877,7 +896,8 @@ fit_noise <- function(resid = NULL,
     corr_by_run <- if (!is.null(design)) {
       correction_lag <- .lag_budget(correction_max_lag,
                                     "correction_max_lag", 1, n)
-      .validate_design_residuals(resid, design)
+      .validate_design_residuals(resid, design,
+                                 data_norm = .data_norm_total(data_norm, ncol(resid)))
       .acvf_bias_by_run(design, n, runs = runs, censor = censor,
                         max_lag = correction_lag)
     } else {
