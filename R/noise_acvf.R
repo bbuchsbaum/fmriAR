@@ -35,6 +35,10 @@
 #'   `"auto"` (default) or a number, as in [fit_noise()]. This is independent
 #'   of `max_lag`: correction needs enough tail information even when only a
 #'   few output lags are requested.
+#' @param data_norm Optional norm of the data `resid` was computed from, one
+#'   number or one per column, so the orthogonality check can accept
+#'   residuals of a design that fits the data almost exactly; see
+#'   [fit_noise()]. Ignored unless `design` is supplied.
 #' @return An object of class `fmriAR_acvf`: a list with
 #'   \itemize{
 #'     \item `acvf`: named list of autocovariance vectors, lags 0 upward.
@@ -57,7 +61,8 @@
 #' @export
 noise_acvf <- function(resid, runs = NULL, censor = NULL, max_lag = 20L,
                        pooling = c("global", "run", "parcel"), parcels = NULL,
-                       design = NULL, correction_max_lag = "auto") {
+                       design = NULL, correction_max_lag = "auto",
+                       data_norm = NULL) {
   pooling <- match.arg(pooling)
   if (!is.matrix(resid)) resid <- as.matrix(resid)
   storage.mode(resid) <- "double"
@@ -76,7 +81,8 @@ noise_acvf <- function(resid, runs = NULL, censor = NULL, max_lag = 20L,
   # is given, otherwise the per-run centring; `design = FALSE` for neither.
   corr_info <- .correction_maps(resid, design, NULL, runs = runs,
                                 censor = censor, n = n, n_runs = length(Rsets),
-                                correction_max_lag = correction_max_lag)
+                                correction_max_lag = correction_max_lag,
+                                data_norm = data_norm)
   corr_by_run <- corr_info$maps
   if (is.null(runs)) names(Rsets) <- "1"
 
