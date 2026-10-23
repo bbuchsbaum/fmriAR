@@ -893,9 +893,13 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 #'   needs no design; `design = FALSE` turns every correction off and returns
 #'   the plain estimator. A numerical orthogonality check rejects detectable
 #'   mismatches, including typical raw, GLS, robust, or unrelated residuals.
-#'   Orthogonality cannot prove the exact residual-forming provenance, so the
-#'   caller remains responsible for supplying the matching design. Supported
-#'   for every pooling mode with `method = "ar"`, where under
+#'   Directions an ill-conditioned design barely determines (singular values
+#'   below 1e-6 of the largest) are left out of the check, since solvers
+#'   disagree on whether they belong to the fit; for a fit at a lower rank than
+#'   `design`, passing a basis of the fitted column space makes the correction
+#'   exact. Orthogonality cannot prove the exact residual-forming provenance,
+#'   so the caller remains responsible for supplying the matching design.
+#'   Supported for every pooling mode with `method = "ar"`, where under
 #'   `pooling = "parcel"` the per-run bias maps are combined in proportion to
 #'   the lag pairs each run contributes, and for `method = "arma"`, where the
 #'   Hannan--Rissanen estimate is refitted by minimum distance to the corrected

@@ -12,7 +12,8 @@ noise_acvf(
   pooling = c("global", "run", "parcel"),
   parcels = NULL,
   design = NULL,
-  correction_max_lag = "auto"
+  correction_max_lag = "auto",
+  data_norm = NULL
 )
 }
 \arguments{
@@ -44,6 +45,11 @@ the plain estimator.}
 \code{"auto"} (default) or a number, as in \code{\link[=fit_noise]{fit_noise()}}. This is independent
 of \code{max_lag}: correction needs enough tail information even when only a
 few output lags are requested.}
+
+\item{data_norm}{Optional norm of the data \code{resid} was computed from, one
+number or one per column, so the orthogonality check can accept
+residuals of a design that fits the data almost exactly; see
+\code{\link[=fit_noise]{fit_noise()}}. Ignored unless \code{design} is supplied.}
 }
 \value{
 An object of class \code{fmriAR_acvf}: a list with
