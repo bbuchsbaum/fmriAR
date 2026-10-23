@@ -24,6 +24,17 @@
   error. `fit_noise()` computes it from `Y` when it forms the residuals
   itself. Raw, GLS and unrelated residuals are still rejected. Exact-fit
   residuals give a white plan.
+* The same check also rejected valid residuals from ill-conditioned designs
+  (#16). Near-collinear regressors, such as motion parameters and their
+  derivatives in a still run, leave a singular direction at ~5e-8 of the
+  largest. `qr()` keeps it, but an SVD solver cutting at 1e-7 drops it, and
+  that solver's residuals then carry a component along it (relative
+  projection 0.014-0.046). The check now skips directions below 1e-6 of the
+  largest singular value, since either rank is a valid fit. The correction
+  still uses the full design. On the reported design, `phi` is 0.395 with the
+  full design and 0.394 with the fitted basis, against a truth of 0.4.
+  Well-conditioned designs are checked exactly as before. A rejection now
+  suggests passing the fitted column space as `design`.
 * `enforce_stationary_ar()` warned "no non-missing arguments to min" on an
   all-zero `phi`, which `polyroot()` reduces to a polynomial with no roots.
   Such a `phi` is white and is now returned silently.

@@ -326,6 +326,43 @@ test_that("design check accepts exact-fit residuals given the data norm", {
                "'data_norm' must be")
 })
 
+test_that("design check ignores directions an ill-conditioned design barely determines", {
+  # Two nearly collinear regressors leave a singular direction at ~5e-8 of the
+  # largest. qr() keeps it, an SVD solver cutting at 1e-7 drops it; both fits
+  # are valid, and the second's residuals carry a component along it (#16).
+  set.seed(1)
+  n <- 300L
+  x1 <- rnorm(n)
+  X <- cbind(1, x1, x1 + 1e-7 * rnorm(n), rnorm(n))
+  s <- svd(X)
+  expect_lt(s$d[4L] / s$d[1L], 1e-7)
+  expect_identical(qr(X)$rank, 4L)
+  U <- s$u[, 1:3]
+
+  set.seed(9)
+  v <- 40L
+  E <- apply(matrix(rnorm(n * v), n, v), 2L,
+             function(e) as.numeric(stats::filter(e, 0.4, "recursive")))
+  Y <- 600 + X[, -1L] %*% matrix(rnorm(3L * v), 3L, v) + E
+  R_svd <- Y - U %*% crossprod(U, Y)
+  R_qr <- qr.resid(qr(X), Y)
+
+  expect_no_error(plan_x <- fit_noise(R_svd, p = 1L, design = X))
+  expect_no_error(noise_acvf(R_svd, max_lag = 3L, design = X))
+  expect_no_error(fit_noise(R_qr, p = 1L, design = X))
+  # Checking one direction fewer leaves the correction itself unchanged in
+  # practice: the full design and the fitted basis agree.
+  plan_u <- fit_noise(R_svd, p = 1L, design = U)
+  expect_equal(plan_x$phi[[1]], plan_u$phi[[1]], tolerance = 0.01)
+
+  # Well-determined directions are still enforced.
+  expect_error(fit_noise(Y, p = 1L, design = X),
+               class = "fmriAR_design_residual_mismatch")
+  R_partial <- qr.resid(qr(X[, 1:3]), Y)
+  expect_error(fit_noise(R_partial, p = 1L, design = X),
+               "fitted column space")
+})
+
 test_that("design-residual validation obeys OLS column-space invariants", {
   set.seed(708)
   n <- 90L

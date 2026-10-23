@@ -101,11 +101,16 @@ projecting a design out of the data puts into the autocovariance, and
 hence into \code{phi}. Opt-in, because it changes estimates and needs the design
 to be the one that actually formed the OLS residuals. A numerical
 orthogonality check rejects detectable mismatches, including typical raw,
-GLS, robust, or unrelated residuals. Orthogonality cannot prove the exact
-residual-forming provenance, so the caller remains responsible for
-supplying the matching design. Supported for every pooling mode with
-\code{method = "ar"}; under \code{pooling = "parcel"} the per-run bias maps are
-combined in proportion to the lag pairs each run contributes.}
+GLS, robust, or unrelated residuals. Directions an ill-conditioned design
+barely determines (singular values below 1e-6 of the largest) are left
+out of the check, since solvers disagree on whether they belong to the
+fit; for a fit at a lower rank than \code{design}, passing a basis of the
+fitted column space makes the correction exact. Orthogonality cannot
+prove the exact residual-forming provenance, so the caller remains
+responsible for supplying the matching design. Supported for every
+pooling mode with \code{method = "ar"}; under \code{pooling = "parcel"} the per-run
+bias maps are combined in proportion to the lag pairs each run
+contributes.}
 
 \item{acvf_correction}{Precomputed bias matrices from \code{\link[=acvf_bias_matrix]{acvf_bias_matrix()}},
 as an alternative to \code{design} when many datasets share one design. A single

@@ -688,11 +688,16 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 #'   hence into `phi`. Opt-in, because it changes estimates and needs the design
 #'   to be the one that actually formed the OLS residuals. A numerical
 #'   orthogonality check rejects detectable mismatches, including typical raw,
-#'   GLS, robust, or unrelated residuals. Orthogonality cannot prove the exact
-#'   residual-forming provenance, so the caller remains responsible for
-#'   supplying the matching design. Supported for every pooling mode with
-#'   `method = "ar"`; under `pooling = "parcel"` the per-run bias maps are
-#'   combined in proportion to the lag pairs each run contributes.
+#'   GLS, robust, or unrelated residuals. Directions an ill-conditioned design
+#'   barely determines (singular values below 1e-6 of the largest) are left
+#'   out of the check, since solvers disagree on whether they belong to the
+#'   fit; for a fit at a lower rank than `design`, passing a basis of the
+#'   fitted column space makes the correction exact. Orthogonality cannot
+#'   prove the exact residual-forming provenance, so the caller remains
+#'   responsible for supplying the matching design. Supported for every
+#'   pooling mode with `method = "ar"`; under `pooling = "parcel"` the per-run
+#'   bias maps are combined in proportion to the lag pairs each run
+#'   contributes.
 #' @param acvf_correction Precomputed bias matrices from [acvf_bias_matrix()],
 #'   as an alternative to `design` when many datasets share one design. A single
 #'   matrix is applied to every run; a list is matched against the runs in
