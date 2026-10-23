@@ -11,6 +11,22 @@
   whitening 0.025 -> 0.004; ARMA(1,1) noise fitted with AR: 0.053 -> 0.002.
   Single-voxel fits, white noise, and shared-signal data are unchanged, and
   `fit_noise()` timing is unchanged.
+* `fit_noise(design =)` and `noise_acvf(design =)` rejected valid OLS
+  residuals when the design explained the data almost exactly (#14). The
+  orthogonality check compared the residuals' design-space component with the
+  residuals' own norm. Any solver leaves a component of order machine epsilon
+  times the data norm, so the residuals of an exact fit were judged against
+  themselves. Normal-equation and SVD residuals (~1e-13) read as a relative
+  projection of 0.95 and stopped the call. Only QR residuals from the same
+  factorisation as the check passed. This included `fit_noise()`'s own `Y`/`X`
+  path. A new `data_norm` argument gives the check the data's scale:
+  projections below `sqrt(.Machine$double.eps)` of it count as rounding
+  error. `fit_noise()` computes it from `Y` when it forms the residuals
+  itself. Raw, GLS and unrelated residuals are still rejected. Exact-fit
+  residuals give a white plan.
+* `enforce_stationary_ar()` warned "no non-missing arguments to min" on an
+  all-zero `phi`, which `polyroot()` reduces to a polynomial with no roots.
+  Such a `phi` is white and is now returned silently.
 
 ## Documentation
 

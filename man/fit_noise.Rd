@@ -28,6 +28,7 @@ fit_noise(
   design = NULL,
   acvf_correction = NULL,
   correction_max_lag = 25L,
+  data_norm = NULL,
   parallel = FALSE
 )
 }
@@ -118,6 +119,17 @@ system ill-conditioned, which is refused with a warning rather than
 solved. A design leaving fewer residual degrees of freedom than the budget
 also cannot support it, and the budget is reduced accordingly, again with a
 warning. Ignored unless \code{design} is supplied.}
+
+\item{data_norm}{Optional norm of the data \code{resid} was computed from: one
+number for the whole matrix (\code{sqrt(sum(Y^2))}) or one per column
+(\code{sqrt(colSums(Y^2))}). It gives the orthogonality check behind \code{design}
+a scale for residuals the design explains almost exactly. Those residuals
+are floating-point error, and unless they come from the same QR
+factorisation the check uses, they are not orthogonal to the design
+relative to their own size. With \code{data_norm}, a projection below
+\code{sqrt(.Machine$double.eps) * data_norm} is accepted as rounding error.
+Computed from \code{Y} when the residuals are formed from \code{Y} and \code{X}. Ignored
+unless \code{design} is supplied.}
 
 \item{parallel}{Reserved for future parallel estimation (logical).}
 }

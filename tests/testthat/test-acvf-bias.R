@@ -256,6 +256,74 @@ test_that("design correction rejects residuals from the wrong operator", {
     fit_noise(resid_w, method = "ar", p = 1L, design = X),
     "not orthogonal"
   )
+
+  # The data-norm floor absorbs rounding error only; it does not let these
+  # through.
+  Y_norm <- sqrt(colSums(Y^2))
+  expect_error(
+    fit_noise(Y, method = "ar", p = 1L, design = X, data_norm = Y_norm),
+    class = "fmriAR_design_residual_mismatch"
+  )
+  expect_error(
+    fit_noise(resid_w, method = "ar", p = 1L, design = X, data_norm = Y_norm),
+    class = "fmriAR_design_residual_mismatch"
+  )
+  expect_error(
+    noise_acvf(Y, max_lag = 5L, design = X, data_norm = sqrt(sum(Y^2))),
+    class = "fmriAR_design_residual_mismatch"
+  )
+})
+
+test_that("design check accepts exact-fit residuals given the data norm", {
+  # When the design explains the data exactly, OLS residuals are rounding
+  # error. Only the QR factorisation the check uses leaves them exactly
+  # orthogonal; a normal-equation or SVD solve is just as valid but leaves a
+  # design-space component as large as the residuals themselves (issue #14).
+  set.seed(1)
+  n <- 200L
+  X <- cbind(1, rnorm(n), rnorm(n))
+  y <- drop(X %*% c(100, 2, -1))
+  y_norm <- sqrt(sum(y^2))
+  r_ne <- y - drop(X %*% solve(crossprod(X), crossprod(X, y)))
+  s <- svd(X)
+  r_svd <- y - drop(X %*% (s$v %*% (crossprod(s$u, y) / s$d)))
+  # What such a solver leaves, built deterministically: rounding-sized, and
+  # mostly in the design space.
+  r_round <- 1e-14 * y_norm * drop(X %*% c(1, -0.5, 0.25)) / sqrt(n) +
+    1e-15 * rnorm(n)
+
+  expect_error(fit_noise(cbind(r_round), design = X),
+               class = "fmriAR_design_residual_mismatch")
+  expect_error(noise_acvf(cbind(r_round), max_lag = 3L, design = X),
+               "pass the norm of the data as 'data_norm'")
+
+  for (r in list(r_ne, r_svd, r_round)) {
+    R <- cbind(r)
+    expect_no_warning(plan <- fit_noise(R, design = X, data_norm = y_norm))
+    # A series of rounding error carries no autocorrelation: white.
+    expect_length(plan$phi[[1]], 0L)
+    expect_no_warning(plan_parcel <- fit_noise(
+      R, design = X, data_norm = y_norm, pooling = "parcel", parcels = 1L
+    ))
+    expect_length(plan_parcel$phi_by_parcel[[1]], 0L)
+    expect_no_error(noise_acvf(R, max_lag = 3L, design = X, data_norm = y_norm))
+  }
+
+  # Per-column norms and the whole-matrix norm are equivalent.
+  R2 <- cbind(r_round, 2 * r_round)
+  expect_no_error(fit_noise(R2, design = X, data_norm = c(y_norm, 2 * y_norm)))
+  expect_no_error(fit_noise(R2, design = X, data_norm = sqrt(5) * y_norm))
+
+  # fit_noise() forms residuals from Y and X itself and so knows the scale.
+  expect_no_warning(plan_yx <- fit_noise(Y = cbind(y), X = X, design = X))
+  expect_length(plan_yx$phi[[1]], 0L)
+
+  expect_error(fit_noise(cbind(r_round), design = X, data_norm = c(1, 2)),
+               "'data_norm' must be")
+  expect_error(fit_noise(cbind(r_round), design = X, data_norm = -1),
+               "'data_norm' must be")
+  expect_error(fit_noise(cbind(r_round), design = X, data_norm = NA_real_),
+               "'data_norm' must be")
 })
 
 test_that("design-residual validation obeys OLS column-space invariants", {

@@ -176,7 +176,7 @@ round(rbind(uncorrected = plan_raw$phi[[1]],
             truth = colMeans(phi_true)), 3)
 ```
 
-The correction works for every pooling mode with `method = "ar"`, including `pooling = "parcel"`, and with censoring. It requires residuals that really are OLS residuals from `design` (a numerical orthogonality check rejects obvious mismatches). When many datasets share one design, build the correction once with `acvf_bias_matrix()` and pass it as `acvf_correction`. `noise_acvf(resid, design = X)` returns the corrected autocovariance itself.
+The correction works for every pooling mode with `method = "ar"`, including `pooling = "parcel"`, and with censoring. It requires residuals that really are OLS residuals from `design` (a numerical orthogonality check rejects obvious mismatches). If the design fits some series almost exactly, also pass `data_norm = sqrt(colSums(Y^2))` so their rounding-level residuals are not mistaken for a mismatch; `fit_noise(Y = Y, X = X)` does this itself. When many datasets share one design, build the correction once with `acvf_bias_matrix()` and pass it as `acvf_correction`. `noise_acvf(resid, design = X)` returns the corrected autocovariance itself.
 
 ## Parcel pooling and multiscale shrinkage
 

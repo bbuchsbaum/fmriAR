@@ -55,8 +55,12 @@ enforce_stationary_ar <- function(phi, bound = 0.99, margin = 1e-6) {
   # 0.99 repeated ten times yields coefficients above 45 with min|root| equal to
   # 1 to machine precision, which whitens by amplifying. Shrink geometrically
   # until the characteristic roots are strictly outside by a real margin.
+  # polyroot() drops trailing zero coefficients, so an all-zero phi (white
+  # noise, e.g. from a numerically zero series) has no roots at all and is
+  # trivially stationary; min() over it would warn and return Inf.
   for (i in seq_len(60L)) {
     roots <- tryCatch(Mod(polyroot(c(1, -out))), error = function(e) NA_real_)
+    if (!length(roots)) break
     if (!anyNA(roots) && min(roots) > 1 + margin) break
     out <- out * 0.9
     if (max(abs(out)) < 1e-12) return(numeric(0))
