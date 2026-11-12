@@ -103,8 +103,15 @@ xyw <- whiten(X, Y, runs = runs, method = "ar", p = "auto")
   AFNI root parameters (Cox, 2012) for pipeline comparison, including AFNI's
   additive white-noise ratio `vrt`.
 
-See `vignette("fmriAR-introduction")` and `?fit_noise` for parcel pooling,
-ARMA, and AFNI examples.
+Three vignettes walk through the package on simulated data with known
+answers:
+
+- `vignette("fmriAR-introduction")`: the core workflow, from the OLS
+  false-positive problem to the whiteness check.
+- `vignette("fmriAR-noise-models")`: design-bias correction, choosing the AR
+  order, robust standard errors, ARMA, and AFNI-style filters.
+- `vignette("fmriAR-parcels")`: per-parcel noise models and multiscale
+  pooling.
 
 ## Options
 

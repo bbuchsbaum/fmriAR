@@ -1,3 +1,21 @@
+# fmriAR (development version)
+
+## Documentation
+
+* The single feature-tour vignette is now three, rendered with albersdown:
+  *Getting started* (the OLS false-positive problem, the four-step workflow,
+  and a whiteness check against a design-matched white-noise band),
+  *Refining the noise model* (design-bias correction, order selection, an
+  under-fitted order failing the check, HAC, ARMA, AFNI-style filters) and
+  *Noise that varies across the brain* (per-parcel plans, fitting with
+  `X_by`, multiscale pooling). The simulations now use an HRF-convolved
+  event design, per-run intercepts and drift, and noise simulated per run.
+* Corrections to the old vignette: the autocorrelation band was compared
+  with a voxel average it does not describe; projection bias is downward,
+  not towards zero; multiscale weights do not depend on the number of runs;
+  `compat$plan_info()` does not return per-run coefficients; the AFNI
+  restricted family comes from AFNI's simulation tools, not 3dREMLfit.
+
 # fmriAR 0.4.2
 
 ## Fixes
