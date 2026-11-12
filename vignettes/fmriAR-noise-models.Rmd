@@ -17,15 +17,15 @@ library(ggplot2)
 
 *Getting started* (`vignette("fmriAR-introduction")`) ran the default
 workflow on noise that matched its assumptions. This vignette covers the
-choices behind it: why to pass the design to `fit_noise()`, how the AR order
-is chosen and how to tell when it is too low, when an ARMA model fits better,
-standard errors that tolerate leftover autocorrelation, and filters specified
-in AFNI's restricted form.
+choices behind that workflow: why to pass the design to `fit_noise()`, how
+the AR order is chosen and how to tell when it is too low, standard errors
+that tolerate leftover autocorrelation, when an ARMA model fits better, and
+how to use filters specified in AFNI's restricted form.
 
 The examples use the same kind of simulated study as *Getting started*: two
-runs of 150 volumes at a TR of 2 seconds, an event-related task, an intercept
-for each run and a set of cosine drift terms per run. Only the noise changes
-from section to section.
+runs of 150 volumes at a TR of 2 seconds, an event-related task, and an
+intercept and a set of cosine drift terms for each run. Each section changes
+the noise; the first also varies the number of drift terms.
 
 ```{r helpers}
 library(fmriAR)
@@ -113,11 +113,11 @@ are $My$, where $M = I - X(X^\top X)^{-1}X^\top$ is the projection that
 removes the design, so their covariance is $M \Sigma M$ rather than the
 noise covariance $\Sigma$.
 
-The effect is a downward bias in the estimated autocorrelation, and drift
-regressors cause most of it: slow cosines soak up slow fluctuations, which is
-where autocorrelated noise keeps its power. The figure below fits an AR(1)
-model to the same noise, coefficient 0.5, under designs with more and more
-drift terms.
+The result is a downward bias in the estimated autocorrelation, and drift
+terms cause most of it: slow cosines soak up slow fluctuations, which is
+where autocorrelated noise keeps its power. Below, the same AR(1) noise,
+with coefficient 0.5, is fitted under designs with more and more drift
+terms, once without the design (`plain`) and once with it (`corrected`).
 
 ```{r bias}
 noise <- simulate_noise(2000, ar = 0.5)
@@ -133,7 +133,7 @@ bias <- t(sapply(n_drift, function(k) {
 round(bias, 3)
 ```
 
-```{r fig-bias, echo = FALSE, fig.height = 3.2, fig.cap = "Estimated AR(1) coefficient as drift terms are added to the design. The noise is the same throughout and its true coefficient is 0.5 (grey line). Without the design, the estimate falls steadily; with design = X it stays at the truth."}
+```{r fig-bias, echo = FALSE, fig.height = 3.2, fig.cap = "Estimated AR(1) coefficient as drift terms are added to the design. The noise is the same throughout, and its true coefficient is 0.5 (grey line). Without the design, the estimate falls steadily; with design = X, it stays at the truth through 8 drift terms per run."}
 bd <- data.frame(k = rep(bias[, "drift_terms"], 2),
                  phi = c(bias[, "plain"], bias[, "corrected"]),
                  fit = rep(c("OLS", "Whitened"), each = nrow(bias)))
@@ -153,27 +153,29 @@ ggplot(bd, aes(k, phi, colour = fit)) +
   theme(panel.grid.major.x = element_blank())
 ```
 
-`design = X` undoes the projection: `fit_noise()` works out the bias that
-$M$ puts into each lag of the autocovariance and inverts it. It works with
-every pooling mode for AR models, and with censoring. It needs residuals that
-really are OLS residuals from `X`; a numerical check rejects obvious
-mismatches. At 12 drift terms per run the corrected estimate starts to slip,
-because so few degrees of freedom remain per run; that many drift terms is
-unusual.
+`design = X` corrects for the projection: `fit_noise()` works out the bias
+that $M$ puts into each lag of the autocovariance and inverts it. The
+correction works with every pooling mode for AR models, and with censoring.
+It needs residuals that really are OLS residuals from `X`; a numerical check
+rejects obvious mismatches. From 10 drift terms per run, the corrected
+estimate starts to slip, because so few degrees of freedom remain per run;
+that many drift terms is unusual.
 
 Two helpers expose the same correction. `noise_acvf(resid, design = X)`
 returns the corrected autocovariance itself. `acvf_bias_matrix()` builds the
-correction once, to pass to `fit_noise(acvf_correction = )` for many
-datasets that share the same design, run structure and censored frames.
+correction once, so that it can be passed to `fit_noise(acvf_correction = )`
+for many datasets that share the same design, run structure and censored
+volumes.
 
 ## Choosing the AR order
 
-With `p = "auto"` (the default) `fit_noise()` tries every order from 0 to
-`p_max` (default 6) and keeps the one with the lowest BIC. Pooling many
-voxels gives BIC more evidence than one series would, but neighbouring voxels
-share fluctuations, so `fit_noise()` counts them at an effective number:
+With `p = "auto"` (the default), `fit_noise()` tries every order from 0 to
+`p_max` (default 6) and keeps the one with the lowest Bayesian information
+criterion (BIC). Pooling many voxels gives BIC more evidence than one series
+would. But neighbouring voxels share fluctuations, so `fit_noise()` counts
+them as an effective number of independent voxels,
 $V / (1 + (V - 1)\bar r)$ for $V$ voxels with mean inter-voxel correlation
-$\bar r$. That is a deliberately conservative count.
+$\bar r$. That count is deliberately conservative.
 
 The design correction matters here too. Projection bias distorts every lag a
 little, and with thousands of voxels BIC treats those small, systematic
@@ -188,23 +190,25 @@ c(without_design = fit_noise(r_ar2, runs = runs)$order[["p"]],
   with_design    = fit_noise(r_ar2, runs = runs, design = X)$order[["p"]])
 ```
 
-Without the design, the search adds four coefficients that describe the
+With the design, the search finds AR(2). Without it, the search goes to the
+highest order it tries, adding four coefficients that describe the
 projection, not the noise.
 
-### What an order that is too low looks like
+### Spotting an order that is too low
 
-The check from *Getting started* is how you find out whether an order is too
-low. Below, the same AR(2) noise is whitened with an AR(1) model and with the
-AR(2) model the search chose. The AR(1) filter removes most of the lag-1
-autocorrelation but leaves the voxels outside the white-noise band at lags 1
-and 2.
+The whiteness check from *Getting started* shows when an order is too low.
+Below, the same AR(2) noise is whitened twice: with an AR(1) model, and with
+the AR(2) model the search chose. The AR(1) filter overshoots at lag 1,
+turning a strong positive autocorrelation slightly negative, and leaves a
+positive one at lag 2. At both lags the median voxel falls outside the
+white-noise band.
 
 ```{r underfit}
 plan_ar1 <- fit_noise(r_ar2, runs = runs, p = 1, design = X)
 plan_ar2 <- fit_noise(r_ar2, runs = runs, design = X)
 ```
 
-```{r fig-underfit, echo = FALSE, fig.height = 3.2, fig.cap = "The whiteness check for AR(2) noise. Lines span the middle 95% of voxels; dots mark the median; the grey band is where 95% of one voxel's values fall if its noise is white. An AR(1) filter fails the check at lags 1 and 2; the AR(2) filter passes it."}
+```{r fig-underfit, echo = FALSE, fig.height = 3.2, fig.cap = "The whiteness check for AR(2) noise: residual autocorrelation after OLS, after an AR(1) filter and after an AR(2) filter. Lines span the middle 95% of voxels; dots mark the median; the grey band is where 95% of one voxel's values fall if its noise is white. The AR(1) filter fails at lags 1 and 2; the AR(2) filter passes."}
 acs <- rbind(acf_summary(r_ar2, "OLS"),
              acf_summary(whitened_resid(plan_ar1, X, noise_ar2), "AR(1)"),
              acf_summary(whitened_resid(plan_ar2, X, noise_ar2), "AR(2)"))
@@ -214,14 +218,16 @@ plot_acf_check(acs, good = "AR(2)")
 
 ## Robust standard errors
 
-When some autocorrelation survives whitening, the ordinary standard error is
-off again, in a direction that depends on what was missed.
-`sandwich_from_whitened_resid()` offers `type = "hac"`, a Newey–West
-estimator computed within runs, which allows for leftover autocorrelation at
-short lags. `type = "hc0"` allows for unequal variances only.
+By default (`type = "iid"`), `sandwich_from_whitened_resid()` returns the
+ordinary standard error, which assumes the whitened noise is white. When
+some autocorrelation survives whitening, that standard error is off again,
+in a direction that depends on what was missed. `type = "hac"` gives a
+heteroskedasticity- and autocorrelation-consistent (HAC) Newey–West
+estimator, computed within runs, which allows for leftover autocorrelation
+at short lags. `type = "hc0"` allows for unequal variances only.
 
-Applied to the AR(2) noise above, every voxel is a null voxel, so the share
-passing $|t| > 1.96$ should be 5%:
+The AR(2) noise above has no task effect, so every voxel is null and 5% of
+them should pass $|t| > 1.96$:
 
 ```{r robust}
 false_positive_rate <- function(plan, type) {
@@ -239,19 +245,21 @@ knitr::kable(rates, digits = 3,
              caption = "Share of null voxels with |t| > 1.96, by noise model and standard error.")
 ```
 
-With the under-fitted model the ordinary standard error is wrong; here it
-errs on the cautious side, and in other cases it errs the other way. HAC
-brings the rate back toward 5%. With the right model the two agree. Use HAC
-as a safety net when a model cannot pass the check above, not as a substitute
-for a good noise model. HAC standard errors have no small-sample correction,
-so in short runs they are approximate.
+With the AR(1) model, the ordinary standard error is wrong. Here it errs on
+the cautious side; other misfits make it err the other way. HAC brings the
+rate back toward 5%, and with the correct AR(2) model the two agree. Use HAC
+as a safety net when a noise model cannot pass the whiteness check, not as a
+substitute for a good noise model. It has no small-sample correction, so in
+short runs it is approximate.
 
 ## ARMA models
 
 Scanner noise adds white noise on top of the autocorrelated physiological
 noise. An AR(1) process plus white noise is no longer AR(1): it is
 ARMA(1,1), with one autoregressive and one moving-average coefficient. A pure
-AR model can mimic it only with extra coefficients.
+AR model can mimic it only with extra coefficients. Below, the noise is
+AR(1) with coefficient 0.8 plus white noise. The design correction is
+available for AR models only, so the ARMA fit omits `design`.
 
 ```{r arma}
 noise_mix <- simulate_noise(2000, ar = 0.8, white_sd = 1)
@@ -265,14 +273,15 @@ plan_arma
 ```
 
 ARMA models are estimated by the Hannan–Rissanen procedure, pooled over
-voxels: each voxel is a replicate series sharing the coefficients, and no lag
-crosses a run boundary or a censored frame. `hr_iter` adds refinement
+voxels: each voxel is a replicate series sharing the coefficients, and no
+lag crosses a run boundary or a censored volume. `hr_iter` adds refinement
 iterations.
 
 The BIC search picked AR(`r plan_ar_auto$order[["p"]]`). ARMA(1,1) does the
-same job with two coefficients. Both pass the whiteness check at lags 1 to 3
-(about 5% of voxels outside the band is what white noise gives) and both give
-valid tests:
+same job with two coefficients. In the table below, both pass the whiteness
+check at lags 1 to 3 (white noise leaves about 5% of voxels outside the
+band), and both give valid tests. A plain AR(1), included for comparison,
+fails at lag 1.
 
 ```{r arma-compare}
 score <- function(plan) {
@@ -290,24 +299,24 @@ tab <- rbind(`AR(1)` = score(plan_ar1_mix),
              `ARMA(1,1)` = score(plan_arma))
 colnames(tab) <- c("outside, lag 1", "lag 2", "lag 3", "false positive")
 knitr::kable(tab, digits = 3,
-             caption = "Share of voxels outside the white-noise band, and false-positive rate, for AR(1) plus white noise.")
+             caption = "Share of voxels outside the white-noise band, and false-positive rate, for AR(1) noise plus white noise.")
 ```
 
 `method = "arma"` also accepts `p = "auto"` and `q = "auto"`, searching
-`0:p_max` and `0:q_max` by BIC. Pooling thousands of independent voxels gives
-that search a great deal of evidence, and it tends to choose the largest
-orders on offer. When theory suggests an order, as here, set it; otherwise
-check what the search returns.
+`0:p_max` and `0:q_max` by BIC. Pooling thousands of independent voxels
+gives that search a great deal of evidence, and it tends to choose the
+largest orders on offer. When theory suggests an order, as here, set it;
+otherwise check what the search returns.
 
 ## AFNI-style restricted filters
 
-AFNI describes some noise models by their roots rather than their
+AFNI specifies some noise models by their roots rather than their
 coefficients: an AR(3) with one real root `a` and one complex pair (radius
 `r1`, angle `t1`), or an AR(5) with a second pair (`r2`, `t2`), plus an
 optional share of white noise. `afni_restricted_plan()` turns such a
 specification into an ordinary plan that `whiten_apply()` can use. It does
 not estimate the roots; you supply them, for example to match a simulation
-set up in AFNI's `1dgenARMA11`.
+set up with AFNI's `1dgenARMA11`.
 
 ```{r afni}
 roots <- list(a = 0.5, r1 = 0.4, t1 = pi / 3)
@@ -317,11 +326,11 @@ round(plan_afni$phi[[1]], 3)
 ```
 
 `a`, `r1` and `r2` must be non-negative; values above 0.95 are clamped to
-0.95 and angles are clamped to $[0, \pi]$. The additive white noise is set
-by `vrt`, the share of variance carried by the AR part. With `vrt` below 1
-and `estimate_ma1 = FALSE`, the plan is the exact ARMA(p, p) equivalent of
-AR(p) plus white noise: its autocorrelation is `vrt` times the AR
-autocorrelation at every nonzero lag.
+0.95, and angles are clamped to $[0, \pi]$. The white noise is set by `vrt`,
+the share of variance carried by the AR part. With `vrt` below 1 and
+`estimate_ma1 = FALSE`, the plan is the exact ARMA(p, p) equivalent of AR(p)
+plus white noise: its autocorrelation is `vrt` times the AR autocorrelation
+at every nonzero lag.
 
 ```{r afni-vrt}
 plan_afni_vrt <- afni_restricted_plan(r_ar2, runs = runs, p = 3L,
@@ -330,8 +339,8 @@ plan_afni_vrt <- afni_restricted_plan(r_ar2, runs = runs, p = 3L,
 plan_afni_vrt$order
 ```
 
-With `estimate_ma1 = TRUE` (the default) the roots fix the AR part, an MA(1)
-term is estimated from the AR-filtered residuals, and `vrt` is ignored.
-`parcels` and a list of root specifications keyed by parcel ID give each
-parcel its own filter. `compat$afni_restricted_plan()` is the same function
-under the compatibility interface.
+With `estimate_ma1 = TRUE` (the default), the roots fix the AR part, an MA(1)
+term is estimated from the AR-filtered residuals, and `vrt` is ignored. To
+give each parcel its own filter, pass `parcels` and a list of root
+specifications keyed by parcel ID. `compat$afni_restricted_plan()` is the
+same function under the compatibility interface.

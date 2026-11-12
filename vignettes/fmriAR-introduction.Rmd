@@ -18,22 +18,23 @@ library(ggplot2)
 fMRI noise is autocorrelated: what the scanner records at one volume
 predicts part of what it records at the next. Ordinary least squares (OLS)
 ignores this. Its coefficient estimates remain unbiased, but its standard
-errors come out too small, so its *t* statistics are too large and a 5%
-threshold lets through more than 5% of voxels that have no real effect.
+errors come out too small. Its *t* statistics are then too large, and a 5%
+threshold passes more than 5% of the voxels that have no real effect.
 
-Prewhitening fixes this. You estimate the noise's autocorrelation from the
-residuals of a first OLS fit, build the filter that turns that noise back into
-independent values, apply the same filter to the data and to the design
-matrix, and fit again. fmriAR does the estimation and the filtering. This
-vignette walks through the four steps on simulated data where the truth is
-known, so each step can be checked.
+Prewhitening fixes this. Estimate the autocorrelation from the residuals of
+a first OLS fit, and build a filter that turns the noise into white noise,
+meaning noise with no autocorrelation. Pass both the data and the design
+matrix through that filter, then fit again. fmriAR does the estimation and
+the filtering. This vignette works through the steps on simulated data,
+where the right answers are known, so every result can be checked.
 
 ## A simulated study
 
-Two five-minute runs at a repetition time (TR) of 2 seconds. The task is a
-series of brief events, 12 to 20 seconds apart, convolved with a canonical
-haemodynamic response. The design also has an intercept for each run and three
-slow cosine drift terms per run, as most fMRI models do.
+The study has two five-minute runs of 150 volumes each, at a repetition time
+(TR) of 2 seconds. The task is a series of brief events 12 to 20 seconds
+apart, convolved with a canonical haemodynamic response. As in most fMRI
+models, the design also has an intercept and three slow cosine drift terms
+for each run.
 
 ```{r design}
 library(fmriAR)
@@ -68,10 +69,11 @@ colnames(X) <- c("task", "run1", "run2", paste0("drift", 1:6))
 ```
 
 The noise in each voxel is a first-order autoregressive process, AR(1), with
-coefficient 0.5: each volume's noise is half the previous volume's plus a fresh
-random shock. Each run is simulated separately, as two scanning sessions would
-be. One voxel in ten responds to the task; the rest have no effect at all,
-which is what lets us count false positives.
+coefficient 0.5: each volume's noise is half the previous volume's plus a
+fresh random shock. Each run is simulated separately, so no noise carries
+over from one run to the next. One voxel in ten responds to the task. The
+other 9,000 are *null voxels*, with no effect at all; counting how many of
+them pass a threshold gives the false-positive rate.
 
 ```{r data}
 n_vox <- 10000
@@ -87,16 +89,16 @@ Y <- noise + outer(X[, "task"], beta)
 
 ## The problem: OLS on autocorrelated noise
 
-Fit OLS to every voxel and compute a *t* statistic for the task.
-`sandwich_from_whitened_resid()` returns ordinary OLS standard errors when it
-is handed the unwhitened design and data.
+Fit OLS to every voxel and compute a *t* statistic for the task. Given the
+unwhitened design and data, `sandwich_from_whitened_resid()` returns the
+ordinary OLS standard errors.
 
 ```{r ols}
 ols <- lm.fit(X, Y)
 se_ols <- sandwich_from_whitened_resid(X, Y, beta = ols$coefficients)$se
 t_ols <- ols$coefficients["task", ] / se_ols[1, ]
 
-# Share of no-effect voxels that pass |t| > 1.96
+# Share of null voxels that pass |t| > 1.96
 mean(abs(t_ols[null]) > 1.96)
 ```
 
@@ -108,48 +110,53 @@ The threshold promises 5%. OLS delivers `r sprintf("%.1f%%", 100 * fpr_ols)`.
 
 ## Step 1: Estimate the noise model
 
-`fit_noise()` estimates the autocorrelation from the OLS residuals and fits an
-autoregressive model to it. By default it chooses the order by BIC
-(`p = "auto"`) and pools all voxels and runs into one model
-(`pooling = "global"`). Lag products never span the boundary between runs.
+`fit_noise()` estimates the autocorrelation from the OLS residuals and fits
+an autoregressive model to it. By default it chooses the model order by the
+Bayesian information criterion, BIC (`p = "auto"`), and pools all voxels and
+runs into one model (`pooling = "global"`). It never pairs a volume in one
+run with a volume in another.
 
 ```{r fit}
 plan <- fit_noise(ols$residuals, runs = runs, design = X)
 plan
 ```
 
-The search chose an AR(1) and estimated its coefficient at
+The result is a whitening *plan*: the fitted noise model, in the form
+`whiten_apply()` takes. BIC chose AR(1) and estimated its coefficient at
 `r sprintf("%.2f", plan$phi[[1]][1])`; the truth is 0.5.
 
-Pass `design = X` whenever the residuals come from a fitted model. Removing
-the fitted model also removes some of the noise's autocorrelation, so
-residuals look less autocorrelated than the noise really is. The larger the
-design, the stronger the pull, and drift terms pull hardest. `design = X`
-corrects for it. Without the correction, fits that pool thousands of voxels
-can also pick an AR order that is too high. *Refining the noise model*
-(`vignette("fmriAR-noise-models")`) shows both effects.
+Pass `design = X` whenever the residuals come from a fitted model. Fitting
+removes some of the noise along with the effects being modelled, so the
+residuals look less autocorrelated than the noise really is. The bias grows
+with the size of the design, and drift terms cause most of it. `design = X`
+corrects it. Without the correction, a fit that pools thousands of voxels can
+also choose an AR order that is too high. *Refining the noise model*
+(`vignette("fmriAR-noise-models")`) demonstrates both problems.
 
 ## Step 2: Whiten the design and the data
 
-`whiten_apply()` runs the filter over every column of `X` and `Y`, restarting
-it at the beginning of each run. Your inputs are not modified.
+`whiten_apply()` runs the filter down every column of `X` and `Y`,
+restarting it at the beginning of each run. It returns whitened copies and
+leaves your inputs unchanged.
 
 ```{r whiten}
 w <- whiten_apply(plan, X, Y, runs = runs)
 ```
 
-For an AR(1) the filter is one subtraction: each whitened value is the
-original value minus `r sprintf("%.2f", plan$phi[[1]][1])` times the value one
-volume earlier. That removes the part of the noise the previous volume
+For an AR(1), the filter is a single subtraction: each whitened value is the
+original value minus `r sprintf("%.2f", plan$phi[[1]][1])` times the value
+one volume earlier. That removes the part of the noise the previous volume
 predicts and leaves the fresh shock. The first volume of each run has no
-predecessor, so it is rescaled instead, by $\sqrt{1 - \phi^2}$, which makes
-the result exact generalised least squares (GLS).
+predecessor, so instead it is multiplied by $\sqrt{1 - \phi^2}$, where
+$\phi$ is the AR coefficient. That makes the result exact generalised least
+squares (GLS).
 
-The same filter must be applied to the design. The model says data = design
-× coefficients + noise. Filtering both sides with the same filter keeps that
-equation intact and leaves only the noise whitened.
+The design must go through the same filter. The model says data = design
+× coefficients + noise. Filtering both sides with the same filter leaves the
+equation, and its coefficients, intact; only the noise changes, and it
+becomes white.
 
-```{r fig-filter, echo = FALSE, fig.height = 2.9, fig.cap = "The task regressor before (grey) and after (blue) whitening, volumes 40 to 100 of run 1. Each blue value is the grey value minus half the grey value one volume earlier. Every voxel's data passes through the same filter."}
+```{r fig-filter, echo = FALSE, fig.height = 2.9, fig.cap = "The task regressor before (grey) and after (blue) whitening, volumes 40 to 100 of run 1. Each blue value is the grey value minus half the grey value one volume earlier. Every voxel's data goes through the same filter."}
 win <- 40:100
 fd <- data.frame(t = win, before = X[win, "task"], after = w$X[win, "task"])
 pk <- win[which.max(fd$before)]                 # label beside the tallest peak
@@ -169,13 +176,13 @@ ggplot(fd, aes(t)) +
 
 The whitened regressor rises earlier and falls faster than the original,
 and dips below zero after each response. Whitening keeps the changes in a
-signal and discounts its slow, sustained parts, because slow drifts are
-exactly what autocorrelated noise produces on its own.
+signal and discounts its slow, sustained parts, because slow fluctuations
+are exactly what autocorrelated noise produces on its own.
 
 ## Step 3: Refit and compute standard errors
 
-Fit the whitened data on the whitened design. With white noise, the ordinary
-formula for standard errors is the right one.
+Fit the whitened data on the whitened design. Once the noise is white, the
+ordinary standard-error formula is the right one.
 
 ```{r refit}
 gls <- lm.fit(w$X, w$Y)
@@ -183,10 +190,11 @@ se_gls <- sandwich_from_whitened_resid(w$X, w$Y, beta = gls$coefficients)$se
 t_gls <- gls$coefficients["task", ] / se_gls[1, ]
 ```
 
-Because the simulation tells us which voxels have an effect, we can check
-each fit against the truth. Over the 9,000 voxels with no effect, the
-*reported* standard error should match the *actual* spread of the estimates,
-and 5% of those voxels should pass the threshold.
+Because the simulation records which voxels have an effect, each fit can be
+scored against the truth. Over the 9,000 null voxels, the *reported*
+standard error should match the *actual* spread of the estimates, and 5% of
+the voxels should pass the threshold. The last column, the share of the
+1,000 active voxels that pass, measures sensitivity.
 
 ```{r compare}
 summarise_fit <- function(b, se) {
@@ -199,12 +207,20 @@ knitr::kable(
   rbind(OLS = summarise_fit(ols$coefficients, se_ols),
         prewhitened = summarise_fit(gls$coefficients, se_gls)),
   digits = 3,
-  caption = "Task effect, OLS against prewhitened GLS, scored against the simulation's truth."
+  caption = "The task effect estimated by OLS and after prewhitening, scored against the simulation's truth."
 )
 ```
 
-The excess grows as the threshold tightens, which is where whole-brain
-analyses operate:
+OLS reports a standard error well below the actual spread of its estimates,
+and its false-positive rate more than doubles. After prewhitening, reported
+and actual agree, and the rate is back near 5%. The whitened estimates also
+vary less than the OLS ones, so little real sensitivity is lost: much of
+OLS's higher true-positive rate came from the same too-small standard error
+that produced its false positives.
+
+In relative terms, the excess grows as the threshold tightens. OLS passes
+about twice the nominal rate at 5%, and several times the nominal rate at
+0.1%, the kind of strict threshold that whole-brain analyses use.
 
 ```{r alpha-table}
 rejection_rate <- function(t, alpha) mean(abs(t[null]) > qnorm(1 - alpha / 2))
@@ -215,17 +231,15 @@ knitr::kable(
              OLS = pct(sapply(alpha, rejection_rate, t = t_ols)),
              prewhitened = pct(sapply(alpha, rejection_rate, t = t_gls))),
   align = "rrr",
-  caption = "Share of no-effect voxels declared significant at each threshold."
+  caption = "Share of null voxels declared significant at each threshold."
 )
 ```
 
-OLS reports a standard error smaller than its estimates' real spread, and its
-false-positive rate more than doubles. After prewhitening the two agree and
-the rate is back near 5%. The estimates themselves are also less variable, so
-little real sensitivity is lost: much of OLS's higher hit rate came from the
-same too-small standard error that produced its false positives.
+The distribution of the null *t* statistics shows where the excess comes
+from. Under OLS it is wider than the standard normal that the threshold
+assumes; after whitening it matches.
 
-```{r fig-null, echo = FALSE, fig.height = 4.6, fig.cap = "The task t statistic in the 9,000 voxels with no effect. The curve is the standard normal distribution a valid test assumes. Orange bars, beyond ±1.96, are false positives."}
+```{r fig-null, echo = FALSE, fig.height = 4.6, fig.cap = "The task t statistic in the 9,000 null voxels. The curve is the standard normal distribution that a valid test assumes. Orange bars, where |t| > 1.96, are false positives."}
 n_null <- length(null)
 fpr <- c(mean(abs(t_ols[null]) > 1.96), mean(abs(t_gls[null]) > 1.96))
 lev <- c(sprintf("OLS: %.1f%% of null voxels pass |t| > 1.96", 100 * fpr[1]),
@@ -259,10 +273,10 @@ ggplot(tn, aes(t)) +
         panel.grid.major = element_blank())
 ```
 
-## Step 4: Check that whitening worked
+## Step 4: The whiteness check
 
-If the filter matches the noise, what is left over should be white: a
-voxel's residual at one volume should say nothing about the next.
+If the filter matches the noise, the residuals of the whitened fit are white:
+a voxel's residual at one volume says nothing about its residual at the next.
 `acorr_diagnostics()` measures each voxel's autocorrelation at lags 1, 2, …,
 centring each run separately and never pairing volumes across a run boundary.
 
@@ -274,19 +288,21 @@ ac_after <- acorr_diagnostics(resid_w, runs = runs, max_lag = 10,
                               aggregate = "none")
 
 # Share of voxels whose lag-1 autocorrelation falls outside the
-# 95% range expected of white noise
+# white-noise band, +/- ci
 c(before = mean(abs(ac_before$acf[1, ]) > ac_before$ci),
   after  = mean(abs(ac_after$acf[1, ]) > ac_after$ci))
 ```
 
-`ci` is $1.96 / \sqrt{n}$: 95% of a white-noise series' autocorrelations
-fall within $\pm$`ci`. It describes one voxel, so compare it with the spread
-across voxels, not with their average, which varies far less. Before
-whitening, every voxel's lag-1 autocorrelation lies outside the range. After,
+`ci` is $1.96 / \sqrt{n}$, where $n$ is the number of volumes. A white-noise
+series keeps 95% of its autocorrelations within $\pm$`ci`, the *white-noise
+band*. The band describes one voxel, so compare it with the spread of
+autocorrelations across voxels, not with their average, which varies far
+less. Before whitening, every voxel's lag-1 autocorrelation lies outside the
+band. After whitening,
 `r sprintf("%.0f%%", 100 * mean(abs(ac_after$acf[1, ]) > ac_after$ci))` do,
 close to the 5% expected of white noise.
 
-```{r fig-acf, echo = FALSE, fig.height = 3.6, fig.cap = "Each voxel's autocorrelation at lags 1 to 10. Lines span the middle 95% of the 10,000 voxels; dots mark the median. The grey band is where 95% of one voxel's values fall if its noise is white."}
+```{r fig-acf, echo = FALSE, fig.height = 3.6, fig.cap = "Autocorrelation of each voxel's residuals at lags 1 to 10, after OLS (left) and after whitening (right). Lines span the middle 95% of the 10,000 voxels; dots mark the median. The grey band is where 95% of one voxel's values fall if its noise is white."}
 acf_summary <- function(a, stage) {
   data.frame(stage = stage, lag = a$lags,
              lo = apply(a$acf, 1, quantile, 0.025),
@@ -316,23 +332,23 @@ ggplot(acs, aes(lag)) +
         panel.grid.major.x = element_blank())
 ```
 
-The whitened values centre slightly below zero, at about
+The whitened autocorrelations centre slightly below zero, at about
 `r sprintf("%.2f", median(ac_after$acf))`. That is expected: fitting a model
 makes its residuals slightly negatively autocorrelated, and the more
-regressors per run, the larger the shift. It is also why the share outside
-the band is a little above 5%.
+regressors per run, the larger the shift. The same shift is why the share
+outside the band is a little above 5%.
 
-If some autocorrelation remains, for example because the model order was too
+If some autocorrelation remains, for example because the AR order was too
 low, `sandwich_from_whitened_resid(..., type = "hac", runs = runs)` gives
-standard errors that tolerate it (Newey–West, within runs).
+standard errors that tolerate it (Newey–West, computed within runs).
 
 ## Common situations
 
 ### Several runs
 
-`pooling = "global"` (the default) fits one noise model to all runs. Use
-`pooling = "run"` to give each run its own coefficients, for instance when
-runs differ in length or acquisition.
+`pooling = "global"` (the default) fits one noise model to all runs.
+`pooling = "run"` gives each run its own coefficients, which suits runs that
+differ in length or acquisition.
 
 ```{r pooling-run}
 plan_by_run <- fit_noise(ols$residuals, runs = runs, design = X,
@@ -340,13 +356,13 @@ plan_by_run <- fit_noise(ols$residuals, runs = runs, design = X,
 plan_by_run$phi
 ```
 
-### Scrubbed frames
+### Censored volumes
 
-Frames flagged for motion are passed as `censor`, as indices or as a
-logical vector with one entry per volume. They are left out of the noise
-estimate, and the filter restarts after each one so that no flagged value
-leaks into its neighbours. The whitened output keeps every row and lists the
-censored ones in `censor`; drop them before fitting.
+Pass volumes flagged for motion (scrubbed volumes) as `censor`, either as
+indices or as a logical vector with one entry per volume. They are left out
+of the noise estimate, and the filter restarts after each one so that no
+flagged value leaks into its neighbours. The whitened output keeps every row
+and lists the censored rows in `censor`; drop them before fitting.
 
 ```{r censor}
 scrub <- c(50:52, 170)
@@ -357,13 +373,14 @@ keep <- setdiff(seq_len(n_time), w_c$censor)
 fit_c <- lm.fit(w_c$X[keep, ], w_c$Y[keep, ])
 ```
 
-`whiten_apply()` reuses the plan's censor set when the data have the length
-the plan was fitted on, as here; pass `censor` yourself otherwise.
+`whiten_apply()` reuses the plan's censored volumes when the data have the
+length the plan was fitted on, as here; otherwise pass `censor` yourself.
 
 ### One call
 
-`whiten()` fits the OLS model, estimates the plan and whitens in one step.
-Arguments after `censor` go to `fit_noise()`.
+`whiten()` fits the OLS model, estimates the noise model and whitens, all in
+one step. Arguments after `censor`, such as `design` here, go to
+`fit_noise()`.
 
 ```{r one-call}
 w1 <- whiten(X, Y, runs = runs, design = X)
@@ -371,14 +388,14 @@ w1 <- whiten(X, Y, runs = runs, design = X)
 
 ### Large data
 
-Whitening runs in parallel over voxels when fmriAR was built with OpenMP.
+Whitening runs in parallel over voxels when fmriAR is built with OpenMP.
 `options(fmriAR.max_threads = k)` caps the number of threads.
 
 ## Where next
 
 - *Refining the noise model* (`vignette("fmriAR-noise-models")`): why
-  `design = X` matters, choosing the AR order, ARMA models, robust standard
-  errors, and AFNI-style restricted models.
+  `design = X` matters, choosing the AR order, robust standard errors, ARMA
+  models, and AFNI-style restricted models.
 - *Noise that varies across the brain* (`vignette("fmriAR-parcels")`):
   separate noise models for parcels, steadied by pooling across spatial
   scales.
