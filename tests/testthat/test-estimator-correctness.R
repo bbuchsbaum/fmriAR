@@ -209,8 +209,12 @@ test_that("censoring never yields non-stationary coefficients", {
       resid <- ar_sim(200L, 0.6, nvox = 25L, seed = 1000 + s)
       set.seed(1100 + s)
       cens <- sort(sample.int(200L, round(frac * 200L)))
-      plan <- fmriAR::fit_noise(resid, censor = cens, pooling = "global",
-                                method = "ar", p = "auto", p_max = 6L)
+      # Heavy censoring can push BIC to the order ceiling; that warning is
+      # beside the point here, which is stationarity.
+      plan <- suppressWarnings(
+        fmriAR::fit_noise(resid, censor = cens, pooling = "global",
+                          method = "ar", p = "auto", p_max = 6L),
+        classes = "fmriAR_order_at_ceiling")
       expect_gt(min_root(plan_phi(plan)), 1,
                 label = sprintf("min|root| at censor %.2f seed %d", frac, s))
     }
@@ -657,7 +661,9 @@ test_that("stationarity is enforced on every returned plan", {
         args <- list(resid = resid, method = "ar", p = "auto", p_max = 6L,
                      pooling = pooling, runs = runs, censor = cens)
         if (pooling == "parcel") args$parcels <- rep(1:2, length.out = 6L)
-        plan <- tryCatch(do.call(fmriAR::fit_noise, args), error = identity)
+        plan <- tryCatch(suppressWarnings(do.call(fmriAR::fit_noise, args),
+                                          classes = "fmriAR_order_at_ceiling"),
+                         error = identity)
         expect_false(inherits(plan, "error"),
                      info = sprintf("fit failed: %s/%s seed %d", nm, pooling, s))
         if (inherits(plan, "error")) next
@@ -800,9 +806,11 @@ test_that("pooled gamma stays a valid covariance across runs of unequal reach", 
       resid <- ar_sim(400L, 0.9, nvox = 12L, seed = 5000 + s)
       set.seed(6000 + s)
       cens <- sort(sample(201:400, round(fr * 200)))   # only run 2 is scrubbed
-      plan <- fmriAR::fit_noise(resid, runs = rep(1:2, each = 200L),
-                                censor = cens, pooling = "global",
-                                method = "ar", p = "auto", p_max = 6L)
+      plan <- suppressWarnings(
+        fmriAR::fit_noise(resid, runs = rep(1:2, each = 200L),
+                          censor = cens, pooling = "global",
+                          method = "ar", p = "auto", p_max = 6L),
+        classes = "fmriAR_order_at_ceiling")
       g <- plan$gamma[[1]]
       expect_gt(minev(g), 0,
                 label = sprintf("min eigenvalue, seed %d censor %.1f", s, fr))

@@ -204,3 +204,58 @@
   rbar <- min(max((ratio - 1) / (V - 1), 0), 1)
   max(1, min(V, V / (1 + (V - 1) * rbar)))
 }
+
+# Refine ARMA coefficients against a bias-corrected autocovariance.
+#
+# Hannan-Rissanen works on the residual series itself, so it inherits the
+# projection bias that fitting a design puts into residual autocorrelation and
+# cannot be corrected the way the AR path is: AR(1) + white noise with three
+# cosine drift terms per run came back as phi 0.763 (truth 0.80), and the
+# filter left 17% of voxels outside the white-noise band at lag 1. The
+# corrected autocovariance is available, so the coefficients are refitted to
+# it by minimum distance: minimise sum_k (g_k - s2 * m_k(phi, theta))^2 over
+# lags 0..L, where m is the model autocovariance at unit innovation variance
+# and s2 is profiled out in closed form. On the same data this returned
+# phi 0.797, theta -0.333 (truth 0.80, -0.343) and a filter that passed.
+#
+# Stationarity and invertibility hold by construction: both polynomials are
+# parametrised by partial autocorrelations through tanh. The Hannan-Rissanen
+# estimate is the starting point; if the optimiser fails, it is returned
+# unchanged.
+.arma_refine_acvf <- function(g, phi0, theta0) {
+  p <- length(phi0); q <- length(theta0)
+  L <- length(g) - 1L
+  if (p + q == 0L || L < p + q + 1L || !all(is.finite(g)) || !(g[1] > 0)) {
+    return(NULL)
+  }
+  to_par <- function(phi, theta) {
+    kp <- if (p) pmin(pmax(ar_to_pacf(phi), -0.98), 0.98) else numeric(0)
+    kq <- if (q) pmin(pmax(ar_to_pacf(-theta), -0.98), 0.98) else numeric(0)
+    atanh(c(kp, kq))
+  }
+  from_par <- function(u) {
+    k <- tanh(u)
+    list(phi = if (p) pacf_to_ar(k[seq_len(p)]) else numeric(0),
+         theta = if (q) -pacf_to_ar(k[p + seq_len(q)]) else numeric(0))
+  }
+  gs <- g / g[1]                                  # fit the shape; scale is profiled
+  loss <- function(u) {
+    m <- from_par(u)
+    mk <- tryCatch(arma_acvf_cpp(m$phi, m$theta, L), error = function(e) NULL)
+    if (is.null(mk) || length(mk) < L + 1L || !all(is.finite(mk))) return(1e10)
+    mk <- mk[seq_len(L + 1L)]
+    s2 <- sum(mk * gs) / sum(mk * mk)
+    sum((gs - s2 * mk)^2)
+  }
+  u0 <- to_par(phi0, theta0)
+  if (!all(is.finite(u0))) u0 <- numeric(p + q)
+  opt <- tryCatch(
+    stats::optim(u0, loss, method = if (p + q == 1L) "BFGS" else "Nelder-Mead",
+                 control = list(maxit = 2000L, reltol = 1e-12)),
+    error = function(e) NULL)
+  if (is.null(opt) || !is.finite(opt$value) || opt$value > loss(u0)) return(NULL)
+  m <- from_par(opt$par)
+  mk <- arma_acvf_cpp(m$phi, m$theta, L)[seq_len(L + 1L)]
+  list(phi = as.numeric(m$phi), theta = as.numeric(m$theta),
+       sigma2 = g[1] * sum(mk * gs) / sum(mk * mk))
+}

@@ -52,7 +52,7 @@
 #' @export
 noise_acvf <- function(resid, runs = NULL, censor = NULL, max_lag = 20L,
                        pooling = c("global", "run", "parcel"), parcels = NULL,
-                       design = NULL, correction_max_lag = 25L) {
+                       design = NULL, correction_max_lag = "auto") {
   pooling <- match.arg(pooling)
   if (!is.matrix(resid)) resid <- as.matrix(resid)
   storage.mode(resid) <- "double"
@@ -63,20 +63,16 @@ noise_acvf <- function(resid, runs = NULL, censor = NULL, max_lag = 20L,
 
   censor <- .normalize_censor(censor, n)
 
-  corr_by_run <- if (is.null(design)) {
-    NULL
-  } else {
-    correction_lag <- .lag_budget(correction_max_lag,
-                                  "correction_max_lag", 1, n)
-    .validate_design_residuals(resid, design)
-    .drop_unusable_corrections(
-      .acvf_bias_by_run(design, n, runs = runs, censor = censor,
-                        max_lag = correction_lag))
-  }
-
   # Units to estimate over. "run" and "global" split by run; "global" then
   # pools the per-run results the way fit_noise does.
   Rsets <- .run_sets(runs, n)
+
+  # The same correction fit_noise applies: the full projection when `design`
+  # is given, otherwise the per-run centring; `design = FALSE` for neither.
+  corr_info <- .correction_maps(resid, design, NULL, runs = runs,
+                                censor = censor, n = n, n_runs = length(Rsets),
+                                correction_max_lag = correction_max_lag)
+  corr_by_run <- corr_info$maps
   if (is.null(runs)) names(Rsets) <- "1"
 
   if (pooling == "parcel") {
@@ -165,7 +161,12 @@ noise_acvf <- function(resid, runs = NULL, censor = NULL, max_lag = 20L,
     segment_lengths = lapply(units, `[[`, "seg_len"),
     max_lag = max_lag,
     pooling = pooling,
-    corrected = all(vapply(units, function(u) isTRUE(u$corrected), logical(1)))
+    # TRUE when the design correction was applied to every unit.
+    corrected = identical(corr_info$source, "design") &&
+      all(vapply(units, function(u) isTRUE(u$corrected), logical(1))),
+    correction = if (identical(corr_info$source, "design") &&
+                     !all(vapply(units, function(u) isTRUE(u$corrected), logical(1))))
+      "none" else corr_info$source
   ), class = "fmriAR_acvf")
 }
 

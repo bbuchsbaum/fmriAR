@@ -167,7 +167,8 @@
 # One bias matrix per run, keyed like the run split fit_noise uses. Each run is
 # estimated separately, and the residual operator restricted to a run still
 # involves the whole design, so the matrices genuinely differ between runs.
-.acvf_bias_by_run <- function(design, n, runs = NULL, censor = NULL, max_lag = 20L) {
+.acvf_bias_by_run <- function(design, n, runs = NULL, censor = NULL, max_lag = 20L,
+                              quiet = FALSE, min_budget = 1L) {
   if (!is.matrix(design)) design <- as.matrix(design)
   storage.mode(design) <- "double"
   if (nrow(design) != n) {
@@ -175,35 +176,69 @@
   }
   if (anyNA(design)) stop("'design' contains NA")
   run_vec <- .run_vector(n, runs)
-  qrX <- qr(design)
-  Q <- qr.Q(qrX)[, seq_len(qrX$rank), drop = FALSE]
+  # A design with no columns is the centring-only map: the bias the per-run
+  # mean removal puts into the estimate, which applies to every fit.
+  if (ncol(design) == 0L) {
+    Q <- matrix(0, n, 0L)
+    rank <- 0L
+  } else {
+    qrX <- qr(design)
+    rank <- qrX$rank
+    Q <- qr.Q(qrX)[, seq_len(rank), drop = FALSE]
+  }
 
   # Recovering max_lag + 1 autocovariance lags needs at least that many residual
   # dimensions to recover them from. Below the boundary the correction degrades
   # and individual fits start pinning phi at the stationarity clamp: at n = 300
   # with 8 residual degrees of freedom against a 25-lag budget the mean estimate
   # went to -0.18 for a truth of 0.5, worse than no correction at all.
-  df <- n - qrX$rank
+  df <- n - rank
+  df_capped <- FALSE
   if (df < as.integer(max_lag) + 1L) {
+    df_capped <- TRUE
     capped <- max(1L, df - 1L)
-    warning("residual-bias correction: the design leaves ", df,
-            " residual degrees of freedom, fewer than the ",
-            as.integer(max_lag) + 1L, " autocovariance lags requested. ",
-            "Reducing the correction lag budget to ", capped,
-            ". Correcting at a budget the data cannot support returns ",
-            "coefficients pinned at the stationarity clamp.", call. = FALSE)
+    if (!isTRUE(quiet)) {
+      warning("residual-bias correction: the design leaves ", df,
+              " residual degrees of freedom, fewer than the ",
+              as.integer(max_lag) + 1L, " autocovariance lags requested. ",
+              "Reducing the correction lag budget to ", capped,
+              ". Correcting at a budget the data cannot support returns ",
+              "coefficients pinned at the stationarity clamp.", call. = FALSE)
+    }
     max_lag <- capped
   }
 
   Rsets <- .run_sets(runs, n)
   cens <- if (is.null(censor)) integer(0) else as.integer(censor)
 
-  setNames(lapply(Rsets, function(ridx) {
+  # A budget beyond a third of a run's valid volumes estimates the long lags
+  # from too few pairs: on white noise at n = 100 the spread of the corrected
+  # lag-1 autocorrelation doubled between budgets of 8 and 40, and one fit at a
+  # budget near 60 landed at +0.09. Each run is capped on its own; a run too
+  # short to reach `min_budget` gets no correction (NULL).
+  capped_runs <- character(0)
+  run_names <- names(Rsets)
+  if (is.null(run_names)) run_names <- as.character(seq_along(Rsets))
+  out <- setNames(lapply(seq_along(Rsets), function(i) {
+    nm <- run_names[i]
+    ridx <- Rsets[[i]]
     keep <- setdiff(ridx, cens)
-    if (length(keep) < 2L) return(diag(as.integer(max_lag) + 1L))
+    L_run <- min(as.integer(max_lag), length(keep) %/% 3L)
+    if (L_run < max(1L, as.integer(min_budget))) return(NULL)
+    if (L_run < as.integer(max_lag)) capped_runs <<- c(capped_runs, nm)
     seg_id <- cumsum(c(1L, as.integer(diff(keep) > 1L)))
-    .acvf_bias_core(Q, run_vec, keep, seg_id, max_lag)
+    .acvf_bias_core(Q, run_vec, keep, seg_id, L_run)
   }), names(Rsets))
+  if (is.null(names(Rsets))) names(out) <- NULL
+  # One warning per call: when the residual degrees of freedom already forced
+  # the budget down, that warning has said what matters.
+  if (length(capped_runs) && !isTRUE(quiet) && !df_capped) {
+    warning("residual-bias correction: a lag budget of ", as.integer(max_lag),
+            " exceeds a third of the valid volumes in run(s) ",
+            paste(capped_runs, collapse = ", "), "; those runs use a third ",
+            "of their length instead.", call. = FALSE)
+  }
+  out
 }
 
 #' Bias matrix relating raw residual autocovariance to the truth
@@ -290,7 +325,10 @@ acvf_bias_matrix <- function(design, runs = NULL, censor = NULL, max_lag = 25L) 
   if (is.null(corr_by_run)) return(NULL)
   have <- !vapply(corr_by_run, is.null, logical(1))
   if (!any(have)) return(NULL)
-  L <- nrow(corr_by_run[[which(have)[1L]]])
+  # Runs can end up with different budgets (each is capped by its own length
+  # and conditioning); the pooled map uses the shortest, which every run's map
+  # contains as its leading block.
+  L <- min(vapply(corr_by_run[have], nrow, 0L))
   seg_len <- diff(c(seg$starts0, length(seg$idx)))
   seg_run <- seg$run_id[seg$starts0 + 1L]
   num <- matrix(0, L, L)
@@ -299,7 +337,8 @@ acvf_bias_matrix <- function(design, runs = NULL, censor = NULL, max_lag = 25L) 
     lens <- seg_len[seg_run == r]
     if (!length(lens)) next
     w <- vapply(0:(L - 1L), function(h) sum(pmax(0, lens - h)), 0)
-    A <- if (is.null(corr_by_run[[r]])) diag(L) else corr_by_run[[r]]
+    A <- if (is.null(corr_by_run[[r]])) diag(L) else
+      corr_by_run[[r]][seq_len(L), seq_len(L), drop = FALSE]
     num <- num + w * A
     den <- den + w
   }
