@@ -30,6 +30,7 @@ fit_noise(
   design = NULL,
   acvf_correction = NULL,
   correction_max_lag = "auto",
+  data_norm = NULL,
   parallel = FALSE
 )
 ```
@@ -180,14 +181,18 @@ fit_noise(
   centring introduces, which needs no design; `design = FALSE` turns
   every correction off and returns the plain estimator. A numerical
   orthogonality check rejects detectable mismatches, including typical
-  raw, GLS, robust, or unrelated residuals. Orthogonality cannot prove
-  the exact residual-forming provenance, so the caller remains
-  responsible for supplying the matching design. Supported for every
-  pooling mode with `method = "ar"`, where under `pooling = "parcel"`
-  the per-run bias maps are combined in proportion to the lag pairs each
-  run contributes, and for `method = "arma"`, where the Hannan–Rissanen
-  estimate is refitted by minimum distance to the corrected
-  autocovariance.
+  raw, GLS, robust, or unrelated residuals. Directions an
+  ill-conditioned design barely determines (singular values below 1e-6
+  of the largest) are left out of the check, since solvers disagree on
+  whether they belong to the fit; for a fit at a lower rank than
+  `design`, passing a basis of the fitted column space makes the
+  correction exact. Orthogonality cannot prove the exact
+  residual-forming provenance, so the caller remains responsible for
+  supplying the matching design. Supported for every pooling mode with
+  `method = "ar"`, where under `pooling = "parcel"` the per-run bias
+  maps are combined in proportion to the lag pairs each run contributes,
+  and for `method = "arma"`, where the Hannan–Rissanen estimate is
+  refitted by minimum distance to the corrected autocovariance.
 
 - acvf_correction:
 
@@ -211,6 +216,21 @@ fit_noise(
   warning also reports when the fitted noise model is still clearly
   autocorrelated at the end of the budget, where the correction becomes
   partial.
+
+- data_norm:
+
+  Optional norm of the data `resid` was computed from: one number for
+  the whole matrix (`sqrt(sum(Y^2))`) or one per column
+  (`sqrt(colSums(Y^2))`). It gives the orthogonality check behind
+  `design` a scale for residuals the design explains almost exactly.
+  Those residuals are floating-point error, and unless they come from
+  the same QR factorisation the check uses, they are not orthogonal to
+  the design relative to their own size. With `data_norm`, a projection
+  below `sqrt(.Machine$double.eps) * data_norm` is accepted as rounding
+  error. Computed from `Y` when the residuals are formed from `Y` and
+  `X`, and by
+  [`whiten()`](https://bbuchsbaum.github.io/fmriAR/reference/whiten.md).
+  Ignored unless `design` is supplied.
 
 - parallel:
 

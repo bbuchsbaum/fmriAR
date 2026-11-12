@@ -17,7 +17,8 @@ noise_acvf(
   pooling = c("global", "run", "parcel"),
   parcels = NULL,
   design = NULL,
-  correction_max_lag = "auto"
+  correction_max_lag = "auto",
+  data_norm = NULL
 )
 ```
 
@@ -71,6 +72,14 @@ noise_acvf(
   [`fit_noise()`](https://bbuchsbaum.github.io/fmriAR/reference/fit_noise.md).
   This is independent of `max_lag`: correction needs enough tail
   information even when only a few output lags are requested.
+
+- data_norm:
+
+  Optional norm of the data `resid` was computed from, one number or one
+  per column, so the orthogonality check can accept residuals of a
+  design that fits the data almost exactly; see
+  [`fit_noise()`](https://bbuchsbaum.github.io/fmriAR/reference/fit_noise.md).
+  Ignored unless `design` is supplied.
 
 ## Value
 

@@ -62,7 +62,8 @@ does not have its autocorrelation destroyed by the centering.</p>
 <span>  pooling <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"global"</span>, <span class="st">"run"</span>, <span class="st">"parcel"</span><span class="op">)</span>,</span>
 <span>  parcels <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  design <span class="op">=</span> <span class="cn">NULL</span>,</span>
-<span>  correction_max_lag <span class="op">=</span> <span class="st">"auto"</span></span>
+<span>  correction_max_lag <span class="op">=</span> <span class="st">"auto"</span>,</span>
+<span>  data_norm <span class="op">=</span> <span class="cn">NULL</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -113,6 +114,13 @@ the plain estimator.</p></dd>
 <code>"auto"</code> (default) or a number, as in <code><a href="fit_noise.html">fit_noise()</a></code>. This is independent
 of <code>max_lag</code>: correction needs enough tail information even when only a
 few output lags are requested.</p></dd>
+
+
+<dt id="arg-data-norm">data_norm<a class="anchor" aria-label="anchor" href="#arg-data-norm"></a></dt>
+<dd><p>Optional norm of the data <code>resid</code> was computed from, one
+number or one per column, so the orthogonality check can accept
+residuals of a design that fits the data almost exactly; see
+<code><a href="fit_noise.html">fit_noise()</a></code>. Ignored unless <code>design</code> is supplied.</p></dd>
 
 </dl></div>
     <div class="section level2">
