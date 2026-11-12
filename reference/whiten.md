@@ -1,6 +1,12 @@
 # Fit and apply whitening in one call
 
-Fit and apply whitening in one call
+Fits OLS of `Y` on `X`, estimates a noise model from the residuals with
+[`fit_noise()`](https://bbuchsbaum.github.io/fmriAR/reference/fit_noise.md),
+and whitens `X` and `Y` with it. Because the residuals are OLS residuals
+from `X` by construction, `X` is passed to
+[`fit_noise()`](https://bbuchsbaum.github.io/fmriAR/reference/fit_noise.md)
+as `design`, correcting the bias that fitting puts into their
+autocorrelation; pass `design = FALSE` to turn the correction off.
 
 ## Usage
 

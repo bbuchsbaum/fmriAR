@@ -33,7 +33,10 @@ acvf_bias_matrix(design, runs = NULL, censor = NULL, max_lag = 25L)
 
 - max_lag:
 
-  Highest lag to correct.
+  Highest lag to correct. A run whose valid volumes number fewer than
+  three times this gets a matrix for a third of its length instead, with
+  a warning: past that point the long lags rest on too few pairs to
+  correct reliably.
 
 ## Value
 

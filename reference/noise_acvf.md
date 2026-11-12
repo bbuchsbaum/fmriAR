@@ -17,7 +17,7 @@ noise_acvf(
   pooling = c("global", "run", "parcel"),
   parcels = NULL,
   design = NULL,
-  correction_max_lag = 25L
+  correction_max_lag = "auto"
 )
 ```
 
@@ -59,13 +59,18 @@ noise_acvf(
   provenance; the caller must supply the matching design. When supplied
   the residual bias is corrected; see
   [`acvf_bias_matrix()`](https://bbuchsbaum.github.io/fmriAR/reference/acvf_bias_matrix.md).
+  Without it, the bias from the per-run centring is still corrected, as
+  in
+  [`fit_noise()`](https://bbuchsbaum.github.io/fmriAR/reference/fit_noise.md);
+  `design = FALSE` returns the plain estimator.
 
 - correction_max_lag:
 
-  Lag budget used to estimate and undo residual projection bias when
-  `design` is supplied. This is independent of `max_lag`: correction
-  needs enough tail information even when only a few output lags are
-  requested.
+  Lag budget used to estimate and undo the bias: `"auto"` (default) or a
+  number, as in
+  [`fit_noise()`](https://bbuchsbaum.github.io/fmriAR/reference/fit_noise.md).
+  This is independent of `max_lag`: correction needs enough tail
+  information even when only a few output lags are requested.
 
 ## Value
 
@@ -79,7 +84,12 @@ An object of class `fmriAR_acvf`: a list with
 
 - `n_segments`, `segment_lengths`: the segmentation actually used.
 
-- `max_lag`, `pooling`, `corrected`.
+- `max_lag`, `pooling`.
+
+- `corrected`: `TRUE` when the design correction was applied.
+
+- `correction`: which correction was applied: `"design"`, `"centring"`
+  (no design given), or `"none"`.
 
 Lags with no surviving pairs are dropped rather than reported as zero.
 
@@ -110,6 +120,5 @@ set.seed(1)
 r <- matrix(rnorm(400 * 5), 400, 5)
 a <- noise_acvf(r, runs = rep(1:2, each = 200), max_lag = 5, pooling = "run")
 a$acvf[["1"]]
-#> [1]  1.059682131 -0.023317336 -0.032081492 -0.036966387  0.007025246
-#> [6]  0.103570754
+#> [1]  1.06657322 -0.01641880 -0.02517461 -0.03004980  0.01395318  0.11050943
 ```

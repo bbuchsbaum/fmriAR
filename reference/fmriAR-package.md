@@ -32,6 +32,10 @@ Useful links:
 
 - <https://bbuchsbaum.github.io/fmriAR/>
 
+- <https://github.com/bbuchsbaum/fmriAR>
+
+- Report bugs at <https://github.com/bbuchsbaum/fmriAR/issues>
+
 Useful links:
 
 - [`fit_noise`](https://bbuchsbaum.github.io/fmriAR/reference/fit_noise.md)
@@ -45,4 +49,5 @@ Useful links:
 
 ## Author
 
-**Maintainer**: Bradley Buchsbaum <brad.buchsbaum@gmail.com>
+**Maintainer**: Bradley Buchsbaum <brad.buchsbaum@gmail.com> \[copyright
+holder\]

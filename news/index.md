@@ -1,5 +1,94 @@
 # Changelog
 
+## fmriAR 0.5.0
+
+This release changes estimates in four places. Each change fixes a case
+where the previous behaviour was wrong without saying so; all are
+covered by new regression tests.
+
+### Changes to estimates
+
+- **Order selection no longer mistakes fitting bias for structure.**
+  Residuals from a fitted model carry a small negative autocorrelation
+  at every lag, and with thousands of voxels pooled BIC read it as
+  structure: AR(2) noise with three drift terms per run came back AR(6).
+  - [`whiten()`](https://bbuchsbaum.github.io/fmriAR/reference/whiten.md)
+    and `fit_noise(Y =, X =)` form OLS residuals from `X` themselves and
+    now pass `design = X` to the bias correction.
+  - Without a design,
+    [`fit_noise()`](https://bbuchsbaum.github.io/fmriAR/reference/fit_noise.md)
+    and
+    [`noise_acvf()`](https://bbuchsbaum.github.io/fmriAR/reference/noise_acvf.md)
+    now correct the bias their own per-run centring introduces, which is
+    known exactly. This alone stops over-selection when the design has
+    no drift terms, and moves AR(1) estimates closer to the truth (0.489
+    to 0.499 for a truth of 0.5). `design = FALSE` restores the plain
+    estimator.
+  - When the order search reaches `p_max` (4 or more) without a design
+    correction,
+    [`fit_noise()`](https://bbuchsbaum.github.io/fmriAR/reference/fit_noise.md)
+    warns (class `fmriAR_order_at_ceiling`).
+- **Parcel pooling.** Pooling across scales is now on by default only
+  when `parcel_sets` is supplied, whatever `p` is. Previously,
+  `p = "auto"` without `parcel_sets` pulled every parcel 60% of the way
+  to the cross-parcel mean regardless of its size (three 1,500-voxel
+  regions with AR(1) coefficients 0.20, 0.45 and 0.70 came back 0.35,
+  0.45, 0.55), while an explicit `p` turned pooling off unless a mode
+  was named. New `ms_weights = "adaptive"` (the default) shrinks each
+  parcel toward its parent only as far as its sampling noise justifies
+  relative to the real spread between parcels (empirical Bayes). Regions
+  that genuinely differ keep their estimates; small, noisy parcels are
+  still steadied. `ms_weights = "size"` keeps the previous size-based
+  weights.
+- **ARMA with a design.** `method = "arma"` now accepts `design` (and
+  `acvf_correction`): the Hannan–Rissanen estimate is refitted by
+  minimum distance to the design-corrected autocovariance. For AR(1)
+  plus white noise with drift terms, the AR coefficient moves from 0.763
+  to 0.797 (truth 0.80), and the share of voxels failing a whiteness
+  check falls from 17% to 5%. ARMA plans now report `gamma` with the
+  same correction as AR plans. The automatic ARMA order search warns
+  when it reaches a high ceiling.
+- **Bias correction no longer fails silently.**
+  - The conditioning threshold is now 1e-3 (was 1e-6). A budget of 50
+    lags with 8 drift terms per run returned phi = -0.25 for a truth of
+    0.5 without a warning; between 1e-3 and 1e-4 estimates still
+    slipped.
+  - An ill-conditioned budget is lowered to the largest well-conditioned
+    one instead of being abandoned, which left the full bias in place.
+    Budgets are also capped at a third of each run’s valid volumes.
+  - New default `correction_max_lag = "auto"` (start at 25, lower as
+    needed, silently). A requested budget that has to be lowered is
+    reported.
+  - A warning reports when the fitted noise model is still clearly
+    autocorrelated at the end of the budget, where the correction
+    becomes partial.
+
+### Documentation
+
+- The single feature-tour vignette is now three, rendered with
+  albersdown: *Getting started* (the OLS false-positive problem, the
+  four-step workflow, and a whiteness check against a design-matched
+  white-noise band), *Refining the noise model* (design-bias correction,
+  order selection, an under-fitted order failing the check, HAC, ARMA,
+  AFNI-style filters) and *Noise that varies across the brain*
+  (per-parcel plans, fitting with `X_by`, multiscale pooling). The
+  simulations now use an HRF-convolved event design, per-run intercepts
+  and drift, and noise simulated per run.
+- Corrections to the old vignette: the autocorrelation band was compared
+  with a voxel average it does not describe; projection bias is
+  downward, not towards zero; multiscale weights do not depend on the
+  number of runs; `compat$plan_info()` does not return per-run
+  coefficients; the AFNI restricted family comes from AFNI’s simulation
+  tools, not 3dREMLfit.
+- The censoring recipe now gives the first OLS fit one spike regressor
+  per censored volume, so artefacts in those volumes cannot reach the
+  residuals through the fitted coefficients; rows are dropped with
+  [`setdiff()`](https://rdrr.io/r/base/sets.html), which also works when
+  nothing is censored.
+- README rewritten around the problem and the payoff, with the null-t
+  figure; its quick start passes `design = X`, which keeps `p = "auto"`
+  from choosing too high an order when many voxels are pooled.
+
 ## fmriAR 0.4.2
 
 ### Fixes
