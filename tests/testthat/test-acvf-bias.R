@@ -618,3 +618,16 @@ test_that("omitting design leaves estimates bit-identical", {
   expect_identical(a$gamma, b$gamma)
   expect_identical(a$sigma2, b$sigma2)
 })
+
+test_that("whiten() accepts data its design fits exactly", {
+  # whiten() forms residuals and passes design = X itself, so it must also
+  # pass the data's scale: a column X explains exactly leaves residuals of
+  # rounding size that the orthogonality check cannot judge on their own.
+  set.seed(14)
+  n <- 120L
+  X <- cbind(1, seq_len(n) / n)
+  Y <- cbind(X %*% c(2, -1),
+             replicate(3L, as.numeric(stats::arima.sim(list(ar = 0.4), n))))
+  expect_no_error(w <- whiten(X, Y, p = 1L))
+  expect_true(all(is.finite(w$Y)))
+})
