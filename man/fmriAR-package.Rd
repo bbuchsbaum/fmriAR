@@ -24,6 +24,8 @@ The fmriAR package provides efficient implementations for:
 Useful links:
 \itemize{
   \item \url{https://bbuchsbaum.github.io/fmriAR/}
+  \item \url{https://github.com/bbuchsbaum/fmriAR}
+  \item Report bugs at \url{https://github.com/bbuchsbaum/fmriAR/issues}
 }
 
 
@@ -35,7 +37,7 @@ Useful links:
 }
 }
 \author{
-\strong{Maintainer}: Bradley Buchsbaum \email{brad.buchsbaum@gmail.com}
+\strong{Maintainer}: Bradley Buchsbaum \email{brad.buchsbaum@gmail.com} [copyright holder]
 
 }
 \keyword{internal}

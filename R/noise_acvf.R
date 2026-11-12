@@ -28,11 +28,13 @@
 #'   to this design. A numerical check rejects detectable mismatches, but
 #'   orthogonality alone cannot prove the residual-forming provenance; the
 #'   caller must supply the matching design. When supplied the residual bias is
-#'   corrected; see [acvf_bias_matrix()].
-#' @param correction_max_lag Lag budget used to estimate and undo residual
-#'   projection bias when `design` is supplied. This is independent of
-#'   `max_lag`: correction needs enough tail information even when only a few
-#'   output lags are requested.
+#'   corrected; see [acvf_bias_matrix()]. Without it, the bias from the per-run
+#'   centring is still corrected, as in [fit_noise()]; `design = FALSE` returns
+#'   the plain estimator.
+#' @param correction_max_lag Lag budget used to estimate and undo the bias:
+#'   `"auto"` (default) or a number, as in [fit_noise()]. This is independent
+#'   of `max_lag`: correction needs enough tail information even when only a
+#'   few output lags are requested.
 #' @return An object of class `fmriAR_acvf`: a list with
 #'   \itemize{
 #'     \item `acvf`: named list of autocovariance vectors, lags 0 upward.
@@ -40,7 +42,10 @@
 #'       consumer can tell an estimate backed by thousands of pairs from one
 #'       backed by three.
 #'     \item `n_segments`, `segment_lengths`: the segmentation actually used.
-#'     \item `max_lag`, `pooling`, `corrected`.
+#'     \item `max_lag`, `pooling`.
+#'     \item `corrected`: `TRUE` when the design correction was applied.
+#'     \item `correction`: which correction was applied: `"design"`,
+#'       `"centring"` (no design given), or `"none"`.
 #'   }
 #'   Lags with no surviving pairs are dropped rather than reported as zero.
 #' @seealso [fit_noise()], [acvf_bias_matrix()]

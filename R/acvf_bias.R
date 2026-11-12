@@ -282,7 +282,10 @@
 #'   boundary.
 #' @param censor Optional indices of censored timepoints (1-based), excluded
 #'   exactly as in [fit_noise()].
-#' @param max_lag Highest lag to correct.
+#' @param max_lag Highest lag to correct. A run whose valid volumes number
+#'   fewer than three times this gets a matrix for a third of its length
+#'   instead, with a warning: past that point the long lags rest on too few
+#'   pairs to correct reliably.
 #' @return A named list of `(max_lag + 1)` square matrices, one per run, rows
 #'   indexed by the lag of the raw estimate and columns by the lag of the truth.
 #' @seealso [fit_noise()], [noise_acvf()]

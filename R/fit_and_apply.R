@@ -833,7 +833,11 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 #' @param method Either "ar" or "arma". ARMA models are estimated by a
 #'   Hannan--Rissanen regression pooled over voxels (every voxel is treated as a
 #'   replicate series sharing the coefficients), with all lags kept inside
-#'   contiguous run/censor segments.
+#'   contiguous run/censor segments. With `design`, the estimate is then
+#'   refitted to the design-corrected autocovariance. The automatic ARMA order
+#'   search (`p`/`q = "auto"`) tends to choose the largest orders offered when
+#'   many voxels are pooled, and warns when it does; set the orders when theory
+#'   suggests them (AR(1) noise plus white noise is ARMA(1,1)).
 #' @param p AR order (integer or "auto" if method == "ar"). An explicit order
 #'   is honoured even when it exceeds `p_max`.
 #' @param q MA order (integer), or `"auto"` (ARMA only) to choose it by BIC
@@ -855,34 +859,62 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 #' @param pooling Combine parameters across runs or parcels ("global", "run", "parcel").
 #' @param parcels Integer vector (length = ncol(resid)) giving fine parcel memberships when `pooling = "parcel"`.
 #' @param parcel_sets Optional named list with entries `coarse`, `medium`, `fine` of equal length specifying nested parcel labels for multi-scale pooling.
-#' @param multiscale Multi-scale pooling mode when `parcel_sets` is supplied ("pacf_weighted" or "acvf_pooled"), or `TRUE/FALSE` to toggle pooling.
+#' @param multiscale Multi-scale pooling under `pooling = "parcel"`:
+#'   `"pacf_weighted"` (pool partial autocorrelations, which always yields a
+#'   stationary filter) or `"acvf_pooled"` (pool autocorrelations and refit),
+#'   or `TRUE`/`FALSE`. By default, pooling is on (`"pacf_weighted"`) when
+#'   `parcel_sets` is supplied and off otherwise, whatever `p` is. With
+#'   `multiscale = TRUE` and no `parcel_sets`, each parcel is pooled toward the
+#'   estimate over all voxels.
 #' @param ms_mode Explicit multiscale mode when `multiscale` is logical.
 #' @param p_target Target AR order for multi-scale pooling (defaults to `p_max`).
-#' @param beta Size exponent for multi-scale weights (default 0.5).
+#' @param beta Size exponent for `ms_weights = "size"` (default 0.5).
+#' @param ms_weights How finer scales are pooled toward coarser ones.
+#'   `"adaptive"` (default) uses empirical-Bayes weights: each estimate is
+#'   shrunk toward its parent's by `tau2 / (tau2 + s2)`, where `s2` is its
+#'   sampling variance (from the number of frames and the effective number of
+#'   independent voxels) and `tau2` the spread of estimates around their
+#'   parents, estimated from the data. Parcels that genuinely differ keep their
+#'   estimates; small, noisy parcels are pulled toward their parents.
+#'   `"size"` uses the weights of earlier versions, proportional to
+#'   `size^beta / (1 + dispersion)`, which do not depend on whether the scales
+#'   agree.
 #' @param hr_iter Number of Hannan--Rissanen refinement iterations for ARMA.
 #' @param step1 Preliminary high-order AR fit method for HR ("burg" or "yw").
-#' @param design Optional design matrix (timepoints x regressors) whose
-#'   projection produced `resid`. Supplying it corrects the downward bias that
-#'   projecting a design out of the data puts into the autocovariance, and
-#'   hence into `phi`. Opt-in, because it changes estimates and needs the design
-#'   to be the one that actually formed the OLS residuals. A numerical
-#'   orthogonality check rejects detectable mismatches, including typical raw,
-#'   GLS, robust, or unrelated residuals. Orthogonality cannot prove the exact
-#'   residual-forming provenance, so the caller remains responsible for
-#'   supplying the matching design. Supported for every pooling mode with
-#'   `method = "ar"`; under `pooling = "parcel"` the per-run bias maps are
-#'   combined in proportion to the lag pairs each run contributes.
+#' @param design Design matrix (timepoints x regressors) whose projection
+#'   produced `resid`. Supplying it corrects the downward bias that projecting
+#'   a design out of the data puts into the autocovariance, and hence into the
+#'   coefficients; drift terms cause most of it. Pass it whenever `resid` came
+#'   from a regression: without it, pooling many voxels can also lead BIC to
+#'   choose too high an order. When `resid` is omitted and `Y` and `X` are
+#'   given, `X` is used automatically. Without a design, `fit_noise()` still
+#'   corrects the part of the bias its own per-run centring introduces, which
+#'   needs no design; `design = FALSE` turns every correction off and returns
+#'   the plain estimator. A numerical orthogonality check rejects detectable
+#'   mismatches, including typical raw, GLS, robust, or unrelated residuals.
+#'   Orthogonality cannot prove the exact residual-forming provenance, so the
+#'   caller remains responsible for supplying the matching design. Supported
+#'   for every pooling mode with `method = "ar"`, where under
+#'   `pooling = "parcel"` the per-run bias maps are combined in proportion to
+#'   the lag pairs each run contributes, and for `method = "arma"`, where the
+#'   Hannan--Rissanen estimate is refitted by minimum distance to the corrected
+#'   autocovariance.
 #' @param acvf_correction Precomputed bias matrices from [acvf_bias_matrix()],
 #'   as an alternative to `design` when many datasets share one design. A single
 #'   matrix is applied to every run; a list is matched against the runs in
 #'   order. Mutually exclusive with `design`.
-#' @param correction_max_lag Lag budget for the bias correction (default 25).
-#'   The correction solves a system truncated at this lag, so too small a budget
-#'   leaves bias behind; too large a one approaches the run length and makes the
-#'   system ill-conditioned, which is refused with a warning rather than
-#'   solved. A design leaving fewer residual degrees of freedom than the budget
-#'   also cannot support it, and the budget is reduced accordingly, again with a
-#'   warning. Ignored unless `design` is supplied.
+#' @param correction_max_lag Lag budget for the bias correction: `"auto"`
+#'   (default) or a number. The correction solves a system truncated at this
+#'   lag, assuming the noise autocovariance has died out by then, so too short
+#'   a budget leaves bias behind; too long a one makes the system
+#'   ill-conditioned, faster the more drift terms the design has. `"auto"`
+#'   starts at 25 and lowers the budget as far as needed for a
+#'   well-conditioned system (reciprocal condition number at least 1e-3).
+#'   A number is used as given unless it exceeds a third of a run's valid
+#'   volumes or makes the system ill-conditioned; it is then lowered the same
+#'   way, with a warning. A warning also reports when the fitted noise model is
+#'   still clearly autocorrelated at the end of the budget, where the
+#'   correction becomes partial.
 #' @param parallel Reserved for future parallel estimation (logical).
 #' @return An object of class `fmriAR_plan` used by [whiten_apply()]. Besides the
 #'   AR/MA coefficients the plan carries the noise scale and shape it was fitted
@@ -1730,6 +1762,12 @@ whiten_apply <- function(plan, X, Y, runs = NULL, run_starts = NULL, censor = NU
 }
 
 #' Fit and apply whitening in one call
+#'
+#' Fits OLS of `Y` on `X`, estimates a noise model from the residuals with
+#' [fit_noise()], and whitens `X` and `Y` with it. Because the residuals are
+#' OLS residuals from `X` by construction, `X` is passed to [fit_noise()] as
+#' `design`, correcting the bias that fitting puts into their
+#' autocorrelation; pass `design = FALSE` to turn the correction off.
 #'
 #' @param X Design matrix (time x regressors).
 #' @param Y Data matrix (time x voxels).

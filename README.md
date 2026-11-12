@@ -59,7 +59,8 @@ fit <- lm.fit(w$X, w$Y)
 se  <- sandwich_from_whitened_resid(w$X, w$Y, beta = fit$coefficients)$se
 ```
 
-`whiten(X, Y, runs = runs, design = X)` does steps 1 to 3 in one call.
+`whiten(X, Y, runs = runs)` does steps 1 to 3 in one call, and corrects for
+`X` on its own.
 
 To check the result, `acorr_diagnostics()` returns each voxel's residual
 autocorrelation by lag. *Getting started* shows how to compare it with the
@@ -88,21 +89,25 @@ fit  <- lm.fit(w$X[keep, ], w$Y[keep, ])
   `p = "auto"` (the default), BIC chooses the order, counting correlated
   voxels at a smaller effective number.
 - **ARMA models.** `method = "arma"` uses the Hannan–Rissanen procedure,
-  pooled over voxels. AR(1) noise plus white scanner noise is ARMA(1,1).
-  Set the orders yourself; the automatic ARMA search tends to pick the
-  largest orders it is offered.
+  pooled over voxels, refitted to the design-corrected autocovariance when
+  `design` is given. AR(1) noise plus white scanner noise is ARMA(1,1). Set
+  the orders yourself; the automatic ARMA search tends to pick the largest
+  orders it is offered, and warns when it does.
 - **Exact starts.** The first volume of each run, and of each segment after
   a censored volume, gets the exact stationary initialisation, so within
   each segment whitening is exact generalised least squares for the fitted
   noise model.
 - **Pooling.** One noise model for all voxels and runs (`"global"`, the
-  default), one per run (`"run"`), or one per parcel (`"parcel"`), with
-  optional multiscale pooling across nested parcellations to steady small
-  parcels.
+  default), one per run (`"run"`), or one per parcel (`"parcel"`). Given
+  nested parcellations, small parcels are steadied by pooling toward their
+  parents, by weights that follow the evidence: parcels that genuinely differ
+  keep their own estimates.
 - **Design-bias correction.** Residuals carry $M \Sigma M$ rather than the
   noise covariance $\Sigma$, which biases autocorrelation downward, most of
   all with slow regressors such as drift terms. `design = X` corrects it for
-  AR models, with any pooling and with censoring. `acvf_bias_matrix()`
+  AR and ARMA models, with any pooling and with censoring, choosing a stable
+  lag budget automatically. Without a design, the smaller bias from the
+  estimator's own per-run centring is still corrected. `acvf_bias_matrix()`
   caches the correction for datasets that share a design, run structure and
   censoring.
 - **Standard errors.** `sandwich_from_whitened_resid()` gives ordinary

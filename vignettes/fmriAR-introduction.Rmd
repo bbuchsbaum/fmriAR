@@ -130,7 +130,8 @@ removes some of the noise along with the effects being modelled, so the
 residuals look less autocorrelated than the noise really is. The bias grows
 with the size of the design, and slow regressors cause most of it: drift
 terms above all, but also motion parameters. `design = X` corrects it. Without the correction, a fit that pools thousands of voxels can
-also choose an AR order that is too high. *Refining the noise model*
+also choose an AR order that is too high; `fit_noise()` warns when its
+search reaches the highest order allowed. *Refining the noise model*
 (`vignette("fmriAR-noise-models")`) demonstrates both problems.
 
 ## Step 2: Whiten the design and the data
@@ -433,11 +434,11 @@ length the plan was fitted on, as here; otherwise pass `censor` yourself.
 ### One call
 
 `whiten()` fits the OLS model, estimates the noise model and whitens, all in
-one step. Arguments after `censor`, such as `design` here, go to
-`fit_noise()`.
+one step. It corrects for `X` itself, since it formed the residuals from it.
+Other arguments after `censor` go to `fit_noise()`.
 
 ```{r one-call}
-w1 <- whiten(X, Y, runs = runs, design = X)
+w1 <- whiten(X, Y, runs = runs)
 ```
 
 ### Large data

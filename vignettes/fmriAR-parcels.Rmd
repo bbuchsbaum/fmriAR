@@ -74,17 +74,12 @@ resid <- lm.fit(X, Y)$residuals
 ```
 
 By default, `fit_noise()` fits one noise model to all voxels. To fit one per
-region, pass `pooling = "parcel"` and a parcel label for every voxel. Pass
-`multiscale = FALSE` too. Without it, and with the default `p = "auto"`,
-`fit_noise()` pulls each parcel's coefficients 60% of the way toward their
-average across parcels; here that would give
-`r paste(sprintf("%.2f", sapply(fit_noise(resid, runs = runs, design = X, pooling = "parcel", parcels = region)$phi_by_parcel, "[", 1)), collapse = ", ")`
-instead of estimates near the truth.
+region, pass `pooling = "parcel"` and a parcel label for every voxel.
 
 ```{r plans}
 plan_global <- fit_noise(resid, runs = runs, design = X)
 plan_region <- fit_noise(resid, runs = runs, design = X, pooling = "parcel",
-                         parcels = region, multiscale = FALSE)
+                         parcels = region)
 
 plan_global$phi[[1]]
 unlist(plan_region$phi_by_parcel)
@@ -156,12 +151,11 @@ Y_small <- sapply(phi_fine[fine], ar1_voxel)
 resid_small <- lm.fit(X, Y_small)$residuals
 
 plan_fine <- fit_noise(resid_small, runs = runs, design = X, p = 1,
-                       pooling = "parcel", parcels = fine, multiscale = FALSE)
+                       pooling = "parcel", parcels = fine)
 plan_multi <- fit_noise(resid_small, runs = runs, design = X, p = 1,
                         pooling = "parcel", parcels = fine,
                         parcel_sets = list(fine = fine, medium = medium,
-                                           coarse = coarse),
-                        multiscale = "pacf_weighted")
+                                           coarse = coarse))
 ```
 
 ```{r rmse}
@@ -227,25 +221,27 @@ volumes. It is not computed from the parcel's average time series, whose
 autocorrelation mostly reflects what the voxels have in common rather than
 the noise in each one.
 
-The three scales are then averaged with weights proportional to
-$s^\beta / (1 + d)$, where $s$ is the parcel's number of voxels, $\beta$ is
-0.5 by default (argument `beta`), and $d$ is the spread of voxel variances
-within the parcel, measured relative to the median voxel variance so that
-rescaling the data changes nothing. Larger, more homogeneous parcels get
-more weight, so the region usually carries the most and the fine parcel's
-own estimate the least; a smaller `beta` evens the weights and pools less.
-The weights depend only on parcel size and spread, not on how far a fine
-parcel's estimate is from its parents'.
+Pooling then works from coarse to fine. Each medium parcel's estimate is
+shrunk toward its region's, and each fine parcel's toward its pooled medium
+parcel's, by a weight that follows the evidence:
+$\tau^2 / (\tau^2 + s^2)$ on the parcel's own estimate. Here $s^2$ is the
+parcel's sampling variance, set by the number of volumes and the effective
+number of independent voxels, and $\tau^2$ is how far parcels really differ
+from their parents, estimated from the data at each scale (an
+empirical-Bayes weight). A parcel whose estimate is precise, or whose
+parcels differ genuinely from their parents, keeps most of its own
+estimate; a small, noisy parcel in a homogeneous region is pulled most of
+the way in. That is why the three large regions above would keep their own
+coefficients even if pooling were switched on.
 
-`multiscale = "pacf_weighted"` averages the three scales' partial
-autocorrelations, which always yields a stationary filter.
-`multiscale = "acvf_pooled"` averages their autocovariances and refits.
+`multiscale = "pacf_weighted"` (the default) pools the scales' partial
+autocorrelations, which always yields a stationary filter;
+`multiscale = "acvf_pooled"` pools their autocorrelations and refits.
+`ms_weights = "size"` restores the weights of earlier versions,
+proportional to $n^\beta / (1 + d)$ for a parcel of $n$ voxels whose voxel
+variances spread by $d$; they do not depend on whether the scales agree.
 
-Two defaults are worth knowing:
-
-- With `pooling = "parcel"` and an explicit order such as `p = 1`,
-  multiscale pooling is off unless you name a mode with `multiscale`.
-- With `p = "auto"` and no `parcel_sets`, each parcel's partial
-  autocorrelations are shrunk 60% of the way toward their average across
-  parcels, whatever the parcels' sizes. Pass `multiscale = FALSE`, as above,
-  to keep each parcel's own estimate.
+Pooling happens by default only when you supply `parcel_sets`, whether `p`
+is `"auto"` or a number. `multiscale = TRUE` without `parcel_sets` pools
+each parcel toward the estimate over all voxels, with the same weights;
+`multiscale = FALSE` turns pooling off.

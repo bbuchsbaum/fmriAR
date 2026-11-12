@@ -138,7 +138,7 @@ bias <- t(sapply(n_drift, function(k) {
 round(bias, 3)
 ```
 
-```{r fig-bias, echo = FALSE, fig.height = 3.2, fig.cap = "Estimated AR(1) coefficient as drift terms are added to the design. The noise is the same throughout, and its true coefficient is 0.5. Without the design, the estimate falls steadily; with design = X, it stays at the truth through 8 drift terms per run. The examples in these vignettes use 3."}
+```{r fig-bias, echo = FALSE, fig.height = 3.2, fig.cap = "Estimated AR(1) coefficient as drift terms are added to the design. The noise is the same throughout, and its true coefficient is 0.5. Without the design, the estimate falls steadily; with design = X, it stays at the truth. The examples in these vignettes use 3 drift terms per run."}
 bd <- data.frame(k = rep(bias[, "drift_terms"], 2),
                  phi = c(bias[, "plain"], bias[, "corrected"]),
                  fit = rep(c("OLS", "Whitened"), each = nrow(bias)))
@@ -164,27 +164,29 @@ ggplot(bd, aes(k, phi, colour = fit)) +
 
 `design = X` corrects for the projection: `fit_noise()` works out the bias
 that $M$ puts into each lag of the autocovariance and inverts it. The
-correction works with every pooling mode for AR models, and with censoring.
-It needs residuals that really are OLS residuals from `X`; a numerical check
-rejects obvious mismatches.
+correction works with every pooling mode, for AR and ARMA models, and with
+censoring. It needs residuals that really are OLS residuals from `X`; a
+numerical check rejects obvious mismatches. `whiten()` and
+`fit_noise(Y = , X = )` form the residuals themselves and pass the design on
+their own. Without a design, `fit_noise()` still corrects the smaller bias
+its own per-run centring introduces.
 
-From 10 cosine terms per run the corrected estimate starts to slip. Ten
-cosines in a 150-volume run amount to a 60-second high-pass filter, far
-stricter than the usual 128 seconds. The correction is computed up to a lag
-budget, `correction_max_lag` (default 25), and with that many drift terms
-the longer budget makes it less stable. Nothing warns of this. A shorter
-budget that still covers the noise's autocorrelation fixes it:
+The correction is computed up to a lag budget and assumes the noise
+autocovariance has died out by then. The default,
+`correction_max_lag = "auto"`, starts at 25 lags and shortens the budget
+when the design makes a long one unstable, as many drift terms do. With 12
+cosines per run, a 50-second high-pass filter far stricter than the usual
+128 seconds, it still recovers the truth:
 
 ```{r lag-budget}
 X_12 <- make_design(12)
 r_12 <- lm.fit(X_12, noise)$residuals
-c(default = fit_noise(r_12, runs = runs, p = 1, design = X_12)$phi[[1]],
-  budget_10 = fit_noise(r_12, runs = runs, p = 1, design = X_12,
-                        correction_max_lag = 10)$phi[[1]])
+fit_noise(r_12, runs = runs, p = 1, design = X_12)$phi[[1]]
 ```
 
-If refitting with a shorter budget changes the estimate, use the shorter
-budget.
+A budget you set yourself is shortened the same way, with a warning. If the
+fitted noise is still clearly autocorrelated at the end of the budget, where
+the correction becomes partial, `fit_noise()` warns about that too.
 
 Two helpers expose the same correction. `noise_acvf(resid, design = X)`
 returns the corrected autocovariance itself. `acvf_bias_matrix()` builds the
@@ -211,14 +213,17 @@ X <- make_design(3)
 noise_ar2 <- simulate_noise(2000, ar = c(0.4, 0.2))
 r_ar2 <- lm.fit(X, noise_ar2)$residuals
 
-p_without <- fit_noise(r_ar2, runs = runs)$order[["p"]]
-p_with <- fit_noise(r_ar2, runs = runs, design = X)$order[["p"]]
-c(without_design = p_without, with_design = p_with)
+plan_nodesign <- fit_noise(r_ar2, runs = runs)
+plan_design <- fit_noise(r_ar2, runs = runs, design = X)
+c(without_design = plan_nodesign$order[["p"]],
+  with_design = plan_design$order[["p"]])
 ```
 
-With the design, the search finds AR(`r p_with`). Without it, the search
-chooses AR(`r p_without`), adding `r p_without - p_with` coefficients that
-describe the projection, not the noise.
+With the design, the search finds AR(`r plan_design$order[["p"]]`).
+Without it, the search chooses AR(`r plan_nodesign$order[["p"]]`), adding
+`r plan_nodesign$order[["p"]] - plan_design$order[["p"]]` coefficients that
+describe the projection, not the noise, and `fit_noise()` warns that the
+search reached its ceiling.
 
 ### Spotting an order that is too low
 
@@ -256,7 +261,6 @@ w_ar1 <- whitened(plan_ar1, noise_ar2)
 w_ar2 <- whitened(plan_ar2, noise_ar2)
 
 # The order chosen without the design correction, for comparison
-plan_nodesign <- fit_noise(r_ar2, runs = runs)
 w_nod <- whitened(plan_nodesign, noise_ar2)
 
 # Share of voxels outside the band at lags 1 to 3
@@ -326,33 +330,35 @@ Scanner noise adds white noise on top of the autocorrelated physiological
 noise. An AR(1) process plus white noise is no longer AR(1): it is
 ARMA(1,1), with one autoregressive and one moving-average coefficient. A pure
 AR model can mimic it only with extra coefficients. Below, the noise is
-AR(1) with coefficient 0.8 plus white noise. The design correction is
-available for AR models only, so the ARMA fit omits `design` and carries the
-projection bias.
+AR(1) with coefficient 0.8 plus white noise.
 
 ```{r arma}
 noise_mix <- simulate_noise(2000, ar = 0.8, white_sd = 1)
 r_mix <- lm.fit(X, noise_mix)$residuals
 
 plan_ar_auto <- fit_noise(r_mix, runs = runs, design = X)
-plan_arma <- fit_noise(r_mix, runs = runs, method = "arma", p = 1, q = 1)
+plan_arma <- fit_noise(r_mix, runs = runs, method = "arma", p = 1, q = 1,
+                       design = X)
 
 plan_ar_auto$order
 plan_arma
 ```
 
-ARMA models are estimated by the Hannan–Rissanen procedure, pooled over
-voxels: each voxel is a replicate series sharing the coefficients, and no
-lag crosses a run boundary or a censored volume. `hr_iter` adds refinement
-iterations. The AR coefficient comes out at
-`r sprintf("%.2f", plan_arma$phi[[1]])` rather than 0.8, partly because of
-the uncorrected projection bias.
+ARMA models are first estimated by the Hannan–Rissanen procedure, pooled
+over voxels: each voxel is a replicate series sharing the coefficients, and
+no lag crosses a run boundary or a censored volume (`hr_iter` adds
+refinement iterations). That procedure works on the residual series, so it
+inherits the projection bias; with `design`, the coefficients are then
+refitted to the design-corrected autocovariance. Here they come out at
+`r sprintf("%.2f", plan_arma$phi[[1]])` and
+`r sprintf("%.2f", plan_arma$theta[[1]])`; the truth is 0.8 and about
+-0.34.
 
 The BIC search picked AR(`r plan_ar_auto$order[["p"]]`); ARMA(1,1)
-describes the same noise with two coefficients. The table scores each model,
-along with a plain AR(1) for comparison, by the share of voxels outside the
-white-noise band at lags 1 to 3 (white noise leaves 5%) and by the
-false-positive rate.
+describes the same noise with two coefficients. The table scores each model
+by the share of voxels outside the white-noise band at lags 1 to 3 (white
+noise leaves 5%) and by the false-positive rate, along with a plain AR(1)
+and an ARMA(1,1) fitted without the design, for comparison.
 
 ```{r arma-compare}
 score <- function(plan) {
@@ -364,24 +370,21 @@ score <- function(plan) {
     mean(abs(fit$coefficients["task", ] / se[1, ]) > 1.96))
 }
 plan_ar1_mix <- fit_noise(r_mix, runs = runs, p = 1, design = X)
+plan_arma_nod <- fit_noise(r_mix, runs = runs, method = "arma", p = 1, q = 1)
 tab <- rbind(`AR(1)` = score(plan_ar1_mix),
              `AR, order by BIC` = score(plan_ar_auto),
+             `ARMA(1,1), no design` = score(plan_arma_nod),
              `ARMA(1,1)` = score(plan_arma))
 colnames(tab) <- c("outside, lag 1", "lag 2", "lag 3", "false positive")
 knitr::kable(tab, digits = 3,
              caption = "Share of voxels outside the white-noise band, and false-positive rate, for AR(1) noise plus white noise.")
 ```
 
-The AR(1) fails clearly. The design-corrected AR model passes. ARMA(1,1)
-fails at lags 1 and 2, with
-`r sprintf("%.0f%%", 100 * tab["ARMA(1,1)", 1])` and
-`r sprintf("%.0f%%", 100 * tab["ARMA(1,1)", 2])` of voxels outside the band.
-Without the design correction its coefficients carry the projection bias,
-and the filter leaves autocorrelation behind; with no drift terms in the
-design, the same ARMA(1,1) fit passes. Its false-positive rate stays near
-5% here, while the AR(1)'s tests are badly conservative. Because ARMA fits
-cannot use the design correction, prefer a design-corrected AR model
-whenever the design has drift terms, which is almost always.
+The AR(1) fails clearly, and its tests are conservative. The
+design-corrected AR and ARMA(1,1) models both pass. Without the design, the
+ARMA(1,1) coefficients carry the projection bias, and the filter leaves
+`r sprintf("%.0f%%", 100 * tab["ARMA(1,1), no design", 1])` of voxels
+outside the band at lag 1.
 
 `method = "arma"` also accepts `p = "auto"` and `q = "auto"`, which search
 `0:p_max` and `0:q_max` by BIC. Do not rely on that search:
