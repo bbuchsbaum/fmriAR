@@ -181,6 +181,9 @@ test_that("pacf and MA helpers cover empty and non-finite edges", {
 
   expect_identical(fmriAR:::enforce_stationary_ar(numeric(0)), numeric(0))
   expect_identical(fmriAR:::enforce_stationary_ar(c(NA_real_, 0.1)), numeric(0))
+  # An all-zero phi has no characteristic roots; it is white, not an error.
+  expect_no_warning(phi_white <- fmriAR:::enforce_stationary_ar(c(0, 0)))
+  expect_identical(phi_white, c(0, 0))
 
   # Near-unit-root high-order AR exercises geometric shrink.
   phi_big <- fmriAR:::pacf_to_ar(rep(0.99, 10L))

@@ -45,7 +45,32 @@
 # cannot prove that this exact column space formed the residuals (for example,
 # residuals can also be orthogonal to a nested design). Provenance therefore
 # remains the caller's responsibility.
-.validate_design_residuals <- function(resid, design, tol = 1e-6) {
+#
+# Judging orthogonality against the residuals' own norm alone fails when the
+# design explains the data almost exactly. Any least-squares solver leaves a
+# component in the design space of order machine epsilon times the DATA norm;
+# residuals that are themselves that small are mostly that component, so
+# normal-equation or SVD residuals of an exact fit read as a relative
+# projection near 1, and only the QR factorisation used here leaves them
+# orthogonal. The residuals alone cannot tell this apart from unprojected
+# data, so `data_norm` (the norm of the data the residuals came from) supplies
+# the scale: projections below sqrt(eps) of it are floating-point error, not a
+# different residual-forming operator.
+#
+# An ill-conditioned design has the opposite problem: solvers disagree on its
+# rank. Near-collinear regressors (motion parameters and their derivatives in a
+# still run) leave a direction with singular value ~5e-8 of the largest; qr()
+# keeps it, an SVD solver cutting at 1e-7 drops it, and that solver's residuals
+# then carry a legitimate component along it (relative projection 0.036).
+# Either rank is a defensible fit, so only directions above
+# .DESIGN_DIRECTION_TOL of the largest singular value are checked: a decade
+# above the most aggressive common cutoff (1e-7, R's qr() default). The
+# correction itself still uses the full qr() basis; for a caller who dropped a
+# near-null direction that differs by one direction out of n.
+.DESIGN_DIRECTION_TOL <- 1e-6
+
+.validate_design_residuals <- function(resid, design, tol = 1e-6,
+                                       data_norm = NULL) {
   if (!is.matrix(resid)) resid <- as.matrix(resid)
   if (!is.matrix(design)) design <- as.matrix(design)
   storage.mode(resid) <- "double"
@@ -65,14 +90,34 @@
   resid_norm <- sqrt(sum(resid * resid))
   if (!is.finite(resid_norm) || resid_norm == 0) return(invisible(0))
 
-  relative_projection <- sqrt(sum(crossprod(Q, resid)^2)) / resid_norm
-  if (!is.finite(relative_projection) || relative_projection > tol) {
+  # design[, pivot] = Q R, so the left singular vectors of R rotate Q onto the
+  # design's singular directions. Rotating only when some are dropped keeps
+  # well-conditioned designs on exactly the QR projection.
+  coords <- crossprod(Q, resid)
+  sv <- svd(qr.R(qrX)[seq_len(qrX$rank), , drop = FALSE], nv = 0L)
+  determined <- sv$d > .DESIGN_DIRECTION_TOL * sv$d[1L]
+  if (!all(determined)) {
+    coords <- crossprod(sv$u[, determined, drop = FALSE], coords)
+  }
+  projection <- sqrt(sum(coords^2))
+  relative_projection <- projection / resid_norm
+  noise_floor <- if (is.null(data_norm)) 0 else
+    sqrt(.Machine$double.eps) * data_norm
+  if (!is.finite(projection) ||
+      projection > max(tol * resid_norm, noise_floor)) {
     message <- paste0(
       "'resid' is not orthogonal to 'design' (relative projection ",
       format(relative_projection, digits = 3), "). Design-based ACVF ",
       "correction requires residuals numerically compatible with OLS ",
       "residualization by this design; omit 'design' or supply the matching ",
-      "OLS residuals."
+      "OLS residuals. If the residuals come from a fit at lower numerical ",
+      "rank than 'design', pass a basis of the fitted column space as ",
+      "'design'.",
+      if (is.null(data_norm)) paste0(
+        " If the design explains the data almost exactly, the residuals are ",
+        "floating-point error and cannot be judged against their own size; ",
+        "pass the norm of the data as 'data_norm'."
+      )
     )
     stop(structure(
       list(message = message, call = NULL),
@@ -80,6 +125,18 @@
     ))
   }
   invisible(relative_projection)
+}
+
+# Norm of the data the residuals came from, as one number: either the norm of
+# the whole matrix or one norm per column, which combine to the same thing.
+.data_norm_total <- function(data_norm, n_col) {
+  if (is.null(data_norm)) return(NULL)
+  if (!is.numeric(data_norm) || !length(data_norm) %in% c(1L, n_col) ||
+      any(!is.finite(data_norm)) || any(data_norm < 0)) {
+    stop("'data_norm' must be one non-negative number or one per column of ",
+         "'resid'", call. = FALSE)
+  }
+  sqrt(sum(as.numeric(data_norm)^2))
 }
 
 # S_k applied along the time axis to every row of B (each row an n-vector):

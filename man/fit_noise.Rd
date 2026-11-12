@@ -29,6 +29,7 @@ fit_noise(
   design = NULL,
   acvf_correction = NULL,
   correction_max_lag = "auto",
+  data_norm = NULL,
   parallel = FALSE
 )
 }
@@ -127,9 +128,13 @@ corrects the part of the bias its own per-run centring introduces, which
 needs no design; \code{design = FALSE} turns every correction off and returns
 the plain estimator. A numerical orthogonality check rejects detectable
 mismatches, including typical raw, GLS, robust, or unrelated residuals.
-Orthogonality cannot prove the exact residual-forming provenance, so the
-caller remains responsible for supplying the matching design. Supported
-for every pooling mode with \code{method = "ar"}, where under
+Directions an ill-conditioned design barely determines (singular values
+below 1e-6 of the largest) are left out of the check, since solvers
+disagree on whether they belong to the fit; for a fit at a lower rank than
+\code{design}, passing a basis of the fitted column space makes the correction
+exact. Orthogonality cannot prove the exact residual-forming provenance,
+so the caller remains responsible for supplying the matching design.
+Supported for every pooling mode with \code{method = "ar"}, where under
 \code{pooling = "parcel"} the per-run bias maps are combined in proportion to
 the lag pairs each run contributes, and for \code{method = "arma"}, where the
 Hannan--Rissanen estimate is refitted by minimum distance to the corrected
@@ -152,6 +157,17 @@ volumes or makes the system ill-conditioned; it is then lowered the same
 way, with a warning. A warning also reports when the fitted noise model is
 still clearly autocorrelated at the end of the budget, where the
 correction becomes partial.}
+
+\item{data_norm}{Optional norm of the data \code{resid} was computed from: one
+number for the whole matrix (\code{sqrt(sum(Y^2))}) or one per column
+(\code{sqrt(colSums(Y^2))}). It gives the orthogonality check behind \code{design}
+a scale for residuals the design explains almost exactly. Those residuals
+are floating-point error, and unless they come from the same QR
+factorisation the check uses, they are not orthogonal to the design
+relative to their own size. With \code{data_norm}, a projection below
+\code{sqrt(.Machine$double.eps) * data_norm} is accepted as rounding error.
+Computed from \code{Y} when the residuals are formed from \code{Y} and \code{X}, and by
+\code{\link[=whiten]{whiten()}}. Ignored unless \code{design} is supplied.}
 
 \item{parallel}{Reserved for future parallel estimation (logical).}
 }
