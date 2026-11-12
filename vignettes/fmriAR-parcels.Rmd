@@ -1,0 +1,233 @@
+---
+title: "Noise that varies across the brain"
+output:
+  albersdown::albers_vignette:
+    family: lapis
+    preset: homage
+vignette: >
+  %\VignetteIndexEntry{Noise that varies across the brain}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+library(ggplot2)
+```
+
+Noise is not equally autocorrelated everywhere. Voxels near large vessels
+and ventricles, where cardiac and respiratory fluctuations are strongest,
+usually show more of it than voxels deep in grey matter. One noise model for
+the whole brain then under-whitens some regions and over-whitens others, and
+the false-positive rate drifts away from 5% in both directions.
+
+fmriAR can fit a separate noise model for each parcel of a parcellation, and
+can steady the estimates for small parcels by borrowing from the larger
+regions that contain them. This vignette shows both. It assumes you have read
+*Getting started* (`vignette("fmriAR-introduction")`).
+
+```{r helpers}
+library(fmriAR)
+set.seed(9)
+
+TR <- 2
+n_per_run <- 150
+runs <- rep(1:2, each = n_per_run)
+
+hrf <- function(t) dgamma(t, 6) - dgamma(t, 16) / 6
+h <- hrf(seq(0, 30, by = TR))
+event_regressor <- function(n) {
+  onsets <- cumsum(sample(6:10, n, replace = TRUE))
+  stim <- tabulate(onsets[onsets <= n], nbins = n)
+  x <- stats::filter(stim, h / max(h), sides = 1)
+  as.numeric(replace(x, is.na(x), 0))
+}
+cosines <- function(n, k) {
+  sapply(seq_len(k), function(j) cos(pi * j * (seq_len(n) - 0.5) / n))
+}
+none <- matrix(0, n_per_run, 3)
+X <- cbind(c(event_regressor(n_per_run), event_regressor(n_per_run)),
+           runs == 1, runs == 2,
+           rbind(cosines(n_per_run, 3), none),
+           rbind(none, cosines(n_per_run, 3)))
+colnames(X) <- c("task", "run1", "run2", paste0("drift", 1:6))
+
+# AR(1) noise for one voxel with coefficient phi, each run simulated separately
+ar1_voxel <- function(phi) {
+  c(arima.sim(list(ar = phi), n = n_per_run),
+    arima.sim(list(ar = phi), n = n_per_run))
+}
+```
+
+## One model or one per region
+
+Three regions of 1,500 voxels each, with AR(1) noise coefficients of 0.2,
+0.45 and 0.7. No voxel has a task effect, so every significant voxel is a
+false positive.
+
+```{r regions}
+region_phi <- c(0.2, 0.45, 0.7)
+region <- rep(1:3, each = 1500)
+Y <- sapply(region_phi[region], ar1_voxel)
+resid <- lm.fit(X, Y)$residuals
+```
+
+A global plan fits one model to all of them. A parcel plan fits one per
+region: pass `pooling = "parcel"` and a parcel label for every voxel.
+`multiscale = FALSE` keeps each region's estimate as it is; the next section
+explains the alternative.
+
+```{r plans}
+plan_global <- fit_noise(resid, runs = runs, design = X)
+plan_region <- fit_noise(resid, runs = runs, design = X, pooling = "parcel",
+                         parcels = region, multiscale = FALSE)
+
+plan_global$phi[[1]]
+unlist(plan_region$phi_by_parcel)
+```
+
+Each region's estimate matches its truth. A mixture of three AR(1) processes
+is not itself an AR(1), so the global search settles on a longer model whose
+first coefficient lies between the three.
+
+With a parcel plan, `whiten_apply()` needs the parcel labels and returns one
+whitened design per parcel in `X_by`, keyed by parcel ID. The data are
+whitened voxel by voxel, so `Y` keeps its shape. Fit each parcel's voxels
+with that parcel's design:
+
+```{r parcel-fit}
+task_t <- function(plan, parcels = NULL) {
+  w <- whiten_apply(plan, X, Y, runs = runs, parcels = parcels)
+  designs <- if (is.null(w$X_by)) list(all = w$X) else w$X_by
+  t <- numeric(ncol(Y))
+  for (id in names(designs)) {
+    cols <- if (id == "all") seq_len(ncol(Y)) else which(parcels == id)
+    Xw <- designs[[id]]
+    Yw <- w$Y[, cols, drop = FALSE]
+    fit <- lm.fit(Xw, Yw)
+    se <- sandwich_from_whitened_resid(Xw, Yw, beta = fit$coefficients)$se
+    t[cols] <- fit$coefficients["task", ] / se[1, ]
+  }
+  t
+}
+
+fp_rate <- rbind(
+  global = tapply(abs(task_t(plan_global)) > 1.96, region, mean),
+  `per region` = tapply(abs(task_t(plan_region, region)) > 1.96, region, mean)
+)
+colnames(fp_rate) <- sprintf("noise %.2f", region_phi)
+knitr::kable(fp_rate, digits = 3,
+             caption = "False-positive rate by region, at a nominal 5%.")
+```
+
+The global model sits between the three regions. It removes too much
+autocorrelation from the least autocorrelated region, whose tests become
+conservative, and too little from the most autocorrelated, whose
+false-positive rate rises above 5%. Separate models bring all three much
+closer to 5%.
+
+## Small parcels and multiscale pooling
+
+Fine parcellations have small parcels, and a noise model estimated from a few
+voxels is noisy. Multiscale pooling steadies it. You supply the parcellation
+at three nested scales, and each fine parcel's estimate is combined with the
+estimates of the medium and coarse parcels that contain it.
+
+Here 24 fine parcels of 4 voxels each sit inside 6 medium parcels, which sit
+inside the same 3 regions as before. Each fine parcel's true coefficient is
+its region's plus a little parcel-specific variation.
+
+```{r nested}
+fine <- rep(1:24, each = 4)          # fine parcel of each voxel
+medium <- (fine - 1) %/% 4 + 1       # 4 fine parcels per medium parcel
+coarse <- (fine - 1) %/% 8 + 1       # 8 fine parcels per region
+phi_fine <- region_phi[(1:24 - 1) %/% 8 + 1] + rnorm(24, sd = 0.03)
+
+Y_small <- sapply(phi_fine[fine], ar1_voxel)
+resid_small <- lm.fit(X, Y_small)$residuals
+
+plan_fine <- fit_noise(resid_small, runs = runs, design = X, p = 1,
+                       pooling = "parcel", parcels = fine, multiscale = FALSE)
+plan_multi <- fit_noise(resid_small, runs = runs, design = X, p = 1,
+                        pooling = "parcel", parcels = fine,
+                        parcel_sets = list(fine = fine, medium = medium,
+                                           coarse = coarse),
+                        multiscale = "pacf_weighted")
+```
+
+```{r rmse}
+est <- data.frame(
+  parcel = 1:24,
+  truth = phi_fine,
+  `fine only` = sapply(plan_fine$phi_by_parcel, `[`, 1),
+  multiscale = sapply(plan_multi$phi_by_parcel, `[`, 1),
+  check.names = FALSE
+)
+rmse <- function(x) sqrt(mean((x - est$truth)^2))
+c(`fine only` = rmse(est$`fine only`), multiscale = rmse(est$multiscale))
+```
+
+```{r fig-parcels, echo = FALSE, fig.height = 3.6, fig.cap = "Error of the AR(1) estimate (estimate minus truth) for each of 24 fine parcels of 4 voxels, grouped by region. Pooling across scales shortens most of the stems."}
+lev <- c("Fine parcel only", "Multiscale")
+pe <- rbind(
+  data.frame(fit = lev[1], parcel = est$parcel, err = est$`fine only` - est$truth),
+  data.frame(fit = lev[2], parcel = est$parcel, err = est$multiscale - est$truth)
+)
+pe$fit <- factor(pe$fit, levels = lev)
+lim <- max(abs(pe$err)) * 1.1
+regions <- data.frame(fit = factor(lev[1], levels = lev),
+                      parcel = c(4.5, 12.5, 20.5), y = 1.5 * lim,
+                      txt = sprintf("region noise %.2f", region_phi))
+ggplot(pe, aes(parcel)) +
+  geom_vline(xintercept = c(8.5, 16.5), linewidth = 0.3, colour = "grey80") +
+  geom_hline(yintercept = 0, linewidth = 0.3, colour = "grey45") +
+  geom_segment(aes(xend = parcel, y = 0, yend = err, colour = fit),
+               linewidth = 0.6) +
+  geom_point(aes(y = err, colour = fit), size = 1.7) +
+  geom_text(data = regions, aes(y = y, label = txt), vjust = 1, size = 3,
+            colour = "grey45") +
+  facet_wrap(~fit, ncol = 1) +
+  albersdown::scale_color_albers(limits = c("Multiscale", "Fine parcel only"),
+                                 guide = "none") +
+  scale_x_continuous(breaks = NULL) +
+  coord_cartesian(ylim = c(-lim, 1.5 * lim)) +
+  labs(x = "Fine parcel", y = "Estimate minus truth") +
+  theme(strip.background = element_blank(),
+        strip.text = element_text(hjust = 0),
+        panel.grid.major.x = element_blank())
+```
+
+Pooling cuts the typical error by about a third here. Its cost is a pull
+toward the parent regions: a fine parcel whose noise genuinely differs from
+its region's is drawn part of the way back, and its error then has the sign
+of that difference.
+
+## How the pooling works
+
+Each scale's estimate is computed from the autocovariances of that parcel's
+voxels, pooled across voxels without crossing run boundaries or censored
+frames. It is not computed from the parcel's average time series, whose
+autocorrelation mostly reflects what the voxels have in common rather than
+the noise in each one.
+
+The three scales are then averaged with weights proportional to
+$s^\beta / (1 + d)$, where $s$ is the parcel's number of voxels, $\beta$ is
+0.5 by default (argument `beta`), and $d$ is the spread of voxel variances
+within the parcel, measured relative to the median voxel variance so that
+rescaling the data changes nothing. Larger, more homogeneous parcels get more
+weight. The weights are normalised to sum to one, so series length and the
+number of runs cancel out. The weights depend on parcel size and spread only,
+not on how different a fine parcel's estimate is from its parents'.
+
+`multiscale = "pacf_weighted"` averages the three scales' partial
+autocorrelations, which always yields a stationary filter.
+`multiscale = "acvf_pooled"` averages their autocovariances and refits.
+
+Two defaults are worth knowing:
+
+- With `pooling = "parcel"` and an explicit order such as `p = 1`,
+  multiscale pooling is off unless you name a mode with `multiscale`.
+- With `p = "auto"` and no `parcel_sets`, each parcel's partial
+  autocorrelations are shrunk 60% of the way toward their average across
+  parcels, whatever the parcels' sizes. Pass `multiscale = FALSE`, as above,
+  to keep each parcel's own estimate.
