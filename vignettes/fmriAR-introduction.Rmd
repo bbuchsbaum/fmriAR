@@ -156,26 +156,41 @@ The design must go through the same filter. The model says data = design
 equation, and its coefficients, intact; only the noise changes, and it
 becomes white.
 
-```{r fig-filter, echo = FALSE, fig.height = 2.9, fig.cap = "The task regressor before (grey) and after (blue) whitening, volumes 40 to 100 of run 1. Each blue value is the grey value minus half the grey value one volume earlier. Every voxel's data goes through the same filter."}
-win <- 40:100
+```{r fig-filter, echo = FALSE, fig.height = 3.2, fig.cap = "The task regressor before (grey) and after (blue) whitening, one dot per volume, for three events in run 1. Each blue value is the grey value minus half the grey value one volume earlier; two volumes are worked through. Every voxel's data goes through the same filter."}
+phi1 <- plan$phi[[1]][1]
+pk <- 39 + which.max(X[40:100, "task"])         # tallest event in volumes 40-100
+win <- (pk - 10):(pk + 12)
 fd <- data.frame(t = win, before = X[win, "task"], after = w$X[win, "task"])
-pk <- win[which.max(fd$before)]                 # label beside the tallest peak
+x_of <- function(t) X[t, "task"]
+work <- function(t, what) {
+  sprintf("%s: %.2f - %.2f x %.2f\n= %.2f, %s", what, x_of(t), phi1, x_of(t - 1),
+          w$X[t, "task"], if (x_of(t - 1) < 0.5 * x_of(t)) "little removed" else "half removed")
+}
+rise <- pk - 1                                   # volume on the rising edge
+hold <- pk                                       # volume after a large one
 ggplot(fd, aes(t)) +
   geom_hline(yintercept = 0, linewidth = 0.3, colour = "grey75") +
+  annotate("segment", x = c(rise, hold), xend = c(rise, hold),
+           y = x_of(c(rise, hold)), yend = w$X[c(rise, hold), "task"],
+           linewidth = 0.4, colour = "grey55") +
   geom_line(aes(y = before), colour = "grey65", linewidth = 0.5) +
+  geom_point(aes(y = before), colour = "grey65", size = 1) +
   geom_line(aes(y = after, colour = "Whitened"), linewidth = 0.7) +
-  annotate("text", x = pk + 1.3, y = fd$before[fd$t == pk], label = "before",
-           hjust = 0, size = 3.1, colour = "grey45") +
-  annotate("text", x = pk - 1.5, y = fd$after[fd$t == pk - 1],
-           label = "whitened", hjust = 1, size = 3.1) +
+  geom_point(aes(y = after, colour = "Whitened"), size = 1.3) +
+  annotate("text", x = rise - 0.4, y = 1.13, label = work(rise, "rising"),
+           hjust = 1, size = 2.9, lineheight = 0.95, colour = "grey25") +
+  annotate("text", x = hold + 0.5, y = 1.13, label = work(hold, "sustained"),
+           hjust = 0, size = 2.9, lineheight = 0.95, colour = "grey25") +
   albersdown::scale_color_albers(limits = c("Whitened", "OLS"), guide = "none") +
-  scale_y_continuous(breaks = c(0, 0.5, 1)) +
+  scale_y_continuous(breaks = c(0, 0.5, 1), limits = c(NA, 1.22)) +
   labs(x = "Volume (TR = 2 s)", y = NULL) +
-  theme(panel.grid.major.x = element_blank())
+  theme(panel.grid.major = element_blank())
 ```
 
-The whitened regressor rises earlier and falls faster than the original,
-and dips below zero after each response. Whitening keeps the changes in a
+The whitened regressor peaks one volume earlier than the original, falls
+faster, and dips below zero after each response. A volume that differs from
+its predecessor keeps most of its value; a volume that repeats its
+predecessor loses half. Whitening keeps the changes in a
 signal and discounts its slow, sustained parts, because slow fluctuations
 are exactly what autocorrelated noise produces on its own.
 
@@ -205,22 +220,24 @@ summarise_fit <- function(b, se) {
 }
 knitr::kable(
   rbind(OLS = summarise_fit(ols$coefficients, se_ols),
-        prewhitened = summarise_fit(gls$coefficients, se_gls)),
+        whitened = summarise_fit(gls$coefficients, se_gls)),
   digits = 3,
   caption = "The task effect estimated by OLS and after prewhitening, scored against the simulation's truth."
 )
 ```
 
 OLS reports a standard error well below the actual spread of its estimates,
-and its false-positive rate more than doubles. After prewhitening, reported
+and its false-positive rate is
+`r sprintf("%.1f", fpr_ols / 0.05)` times the nominal 5%. After prewhitening, reported
 and actual agree, and the rate is back near 5%. The whitened estimates also
 vary less than the OLS ones, so little real sensitivity is lost: much of
 OLS's higher true-positive rate came from the same too-small standard error
 that produced its false positives.
 
-In relative terms, the excess grows as the threshold tightens. OLS passes
-about twice the nominal rate at 5%, and several times the nominal rate at
-0.1%, the kind of strict threshold that whole-brain analyses use.
+In relative terms, the excess grows as the threshold tightens. At 0.1%, the
+kind of strict threshold that whole-brain analyses use, OLS passes
+`r sprintf("%.0f", mean(abs(t_ols[null]) > qnorm(1 - 0.0005)) / 0.001)` times
+the nominal rate.
 
 ```{r alpha-table}
 rejection_rate <- function(t, alpha) mean(abs(t[null]) > qnorm(1 - alpha / 2))
@@ -229,7 +246,7 @@ pct <- function(x) sprintf("%.2f%%", 100 * x)
 knitr::kable(
   data.frame(threshold = pct(alpha),
              OLS = pct(sapply(alpha, rejection_rate, t = t_ols)),
-             prewhitened = pct(sapply(alpha, rejection_rate, t = t_gls))),
+             whitened = pct(sapply(alpha, rejection_rate, t = t_gls))),
   align = "rrr",
   caption = "Share of null voxels declared significant at each threshold."
 )
@@ -239,18 +256,18 @@ The distribution of the null *t* statistics shows where the excess comes
 from. Under OLS it is wider than the standard normal that the threshold
 assumes; after whitening it matches.
 
-```{r fig-null, echo = FALSE, fig.height = 4.6, fig.cap = "The task t statistic in the 9,000 null voxels. The curve is the standard normal distribution that a valid test assumes. Orange bars, where |t| > 1.96, are false positives."}
+```{r fig-null, echo = FALSE, fig.height = 3.9, fig.cap = "The task t statistic in the 9,000 null voxels. The curve is the standard normal distribution that a valid test assumes. Orange bars, where |t| > 1.96, are false positives."}
 n_null <- length(null)
 fpr <- c(mean(abs(t_ols[null]) > 1.96), mean(abs(t_gls[null]) > 1.96))
-lev <- c(sprintf("OLS: %.1f%% of null voxels pass |t| > 1.96", 100 * fpr[1]),
-         sprintf("Whitened: %.1f%% (a valid test gives 5%%)", 100 * fpr[2]))
+lev <- c(sprintf("OLS: %.1f%% pass |t| > 1.96, not 5%%", 100 * fpr[1]),
+         sprintf("Whitened: %.1f%% pass (5%% expected)", 100 * fpr[2]))
 tn <- data.frame(fit = factor(rep(lev, each = n_null), levels = lev),
                  t = c(t_ols[null], t_gls[null]))
 tn$tail <- ifelse(abs(tn$t) > 1.96, "false positive", "inside")
 bw <- 1.96 / 7                    # a bin edge sits exactly on the threshold
 curve <- data.frame(t = seq(-5, 5, by = 0.02))
 curve$d <- dnorm(curve$t)
-curve_lab <- data.frame(fit = factor(lev[1], levels = lev), t = 1.15, d = 0.36,
+curve_lab <- data.frame(fit = factor(lev[1], levels = lev), t = 1.1, d = 0.38,
                         txt = "standard normal:\nwhat a valid test gives")
 ggplot(tn, aes(t)) +
   geom_histogram(data = subset(tn, tail == "inside"),
@@ -266,8 +283,8 @@ ggplot(tn, aes(t)) +
   albersdown::scale_fill_albers(limits = c("Whitened", "OLS"), guide = "none") +
   scale_x_continuous(breaks = c(-1.96, 0, 1.96), labels = c("-1.96", "0", "1.96")) +
   scale_y_continuous(breaks = NULL, expand = expansion(mult = c(0, 0.02))) +
-  coord_cartesian(xlim = c(-5, 5), ylim = c(0, 0.45)) +
-  labs(x = "t statistic, no-effect voxels", y = NULL) +
+  coord_cartesian(xlim = c(-4.5, 4.5), ylim = c(0, 0.45)) +
+  labs(x = "t statistic, null voxels", y = NULL) +
   theme(strip.background = element_blank(),
         strip.text = element_text(hjust = 0),
         panel.grid.major = element_blank())
@@ -286,23 +303,34 @@ ac_before <- acorr_diagnostics(ols$residuals, runs = runs, max_lag = 10,
                                aggregate = "none")
 ac_after <- acorr_diagnostics(resid_w, runs = runs, max_lag = 10,
                               aggregate = "none")
-
-# Share of voxels whose lag-1 autocorrelation falls outside the
-# white-noise band, +/- ci
-c(before = mean(abs(ac_before$acf[1, ]) > ac_before$ci),
-  after  = mean(abs(ac_after$acf[1, ]) > ac_after$ci))
 ```
 
-`ci` is $1.96 / \sqrt{n}$, where $n$ is the number of volumes. A white-noise
-series keeps 95% of its autocorrelations within $\pm$`ci`, the *white-noise
-band*. The band describes one voxel, so compare it with the spread of
+What should white residuals look like? `acorr_diagnostics()` returns `ci`,
+$1.96 / \sqrt{n}$ for $n$ volumes: the textbook range that holds 95% of a
+white-noise series' autocorrelations. Residuals of a fitted model are not
+quite that, though. Fitting pulls their autocorrelations slightly below zero,
+more so the more regressors each run has. The exact reference is easy to
+get: put pure white noise through the same fit and see where its
+autocorrelations fall. That range is the *white-noise band*.
+
+```{r band}
+white <- matrix(rnorm(n_time * 2000), n_time)
+ac_white <- acorr_diagnostics(qr.resid(qr(w$X), white), runs = runs,
+                              max_lag = 10, aggregate = "none")
+band <- apply(ac_white$acf, 1, quantile, probs = c(0.025, 0.975))
+
+# Share of voxels whose lag-1 autocorrelation falls outside the band
+outside <- function(ac) mean(ac$acf[1, ] < band[1, 1] | ac$acf[1, ] > band[2, 1])
+c(before = outside(ac_before), after = outside(ac_after))
+```
+
+The band describes one voxel, so compare it with the spread of
 autocorrelations across voxels, not with their average, which varies far
 less. Before whitening, every voxel's lag-1 autocorrelation lies outside the
 band. After whitening,
-`r sprintf("%.0f%%", 100 * mean(abs(ac_after$acf[1, ]) > ac_after$ci))` do,
-close to the 5% expected of white noise.
+`r sprintf("%.1f%%", 100 * outside(ac_after))` do: what white noise gives.
 
-```{r fig-acf, echo = FALSE, fig.height = 3.6, fig.cap = "Autocorrelation of each voxel's residuals at lags 1 to 10, after OLS (left) and after whitening (right). Lines span the middle 95% of the 10,000 voxels; dots mark the median. The grey band is where 95% of one voxel's values fall if its noise is white."}
+```{r fig-acf, echo = FALSE, fig.height = 3.6, fig.cap = "Autocorrelation of each voxel's residuals at lags 1 to 10, after OLS (left) and after whitening (right). Lines span the middle 95% of the 10,000 voxels; dots mark the median. Grey boxes are the white-noise band: where 95% of the values fall for white noise put through the same fit."}
 acf_summary <- function(a, stage) {
   data.frame(stage = stage, lag = a$lags,
              lo = apply(a$acf, 1, quantile, 0.025),
@@ -312,16 +340,23 @@ acf_summary <- function(a, stage) {
 lev <- c("OLS", "Whitened")
 acs <- rbind(acf_summary(ac_before, lev[1]), acf_summary(ac_after, lev[2]))
 acs$stage <- factor(acs$stage, levels = lev)
-ci <- ac_after$ci
-band_lab <- data.frame(stage = factor(lev[2], levels = lev), lag = 10.4, y = ci,
-                       txt = "white-noise range")
+# The band for each panel: white noise through that panel's own fit
+band_ols <- apply(acorr_diagnostics(qr.resid(qr(X), white), runs = runs,
+                                    max_lag = 10, aggregate = "none")$acf,
+                  1, quantile, probs = c(0.025, 0.975))
+bands <- data.frame(stage = factor(rep(lev, each = 10), levels = lev),
+                    lag = rep(1:10, 2),
+                    lo = c(band_ols[1, ], band[1, ]),
+                    hi = c(band_ols[2, ], band[2, ]))
+band_lab <- data.frame(stage = factor(lev[2], levels = lev), lag = 10.45,
+                       y = band[2, 10], txt = "white-noise band")
 ggplot(acs, aes(lag)) +
-  annotate("rect", xmin = -Inf, xmax = Inf, ymin = -ci, ymax = ci,
-           fill = "grey88") +
+  geom_rect(data = bands, aes(xmin = lag - 0.38, xmax = lag + 0.38,
+                              ymin = lo, ymax = hi), fill = "grey88") +
   geom_hline(yintercept = 0, linewidth = 0.3, colour = "grey55") +
   geom_linerange(aes(ymin = lo, ymax = hi, colour = stage), linewidth = 0.6) +
   geom_point(aes(y = mid, colour = stage), size = 1.8) +
-  geom_text(data = band_lab, aes(lag, y, label = txt), hjust = 1, vjust = -0.5,
+  geom_text(data = band_lab, aes(lag, y, label = txt), hjust = 1, vjust = -0.6,
             size = 3, colour = "grey40") +
   facet_wrap(~stage) +
   albersdown::scale_color_albers(limits = c("Whitened", "OLS"), guide = "none") +
@@ -329,14 +364,16 @@ ggplot(acs, aes(lag)) +
   labs(x = "Lag (volumes)", y = "Autocorrelation") +
   theme(strip.background = element_blank(),
         strip.text = element_text(hjust = 0),
-        panel.grid.major.x = element_blank())
+        panel.grid.major = element_blank())
 ```
 
 The whitened autocorrelations centre slightly below zero, at about
-`r sprintf("%.2f", median(ac_after$acf))`. That is expected: fitting a model
-makes its residuals slightly negatively autocorrelated, and the more
-regressors per run, the larger the shift. The same shift is why the share
-outside the band is a little above 5%.
+`r sprintf("%.2f", median(ac_after$acf))`, and so does the band: that offset
+comes from fitting the model, not from the noise. Against the textbook range
+$\pm$`ci`, which ignores it, about
+`r sprintf("%.0f%%", 100 * mean(abs(ac_after$acf[1, ]) > ac_after$ci))` of
+whitened voxels would look like failures. The OLS residuals at lags 5 to 10
+are also negative, for the same reason.
 
 If some autocorrelation remains, for example because the AR order was too
 low, `sandwich_from_whitened_resid(..., type = "hac", runs = runs)` gives

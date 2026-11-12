@@ -166,44 +166,52 @@ est <- data.frame(
   multiscale = sapply(plan_multi$phi_by_parcel, `[`, 1),
   check.names = FALSE
 )
-rmse <- function(x) sqrt(mean((x - est$truth)^2))
-c(`fine only` = rmse(est$`fine only`), multiscale = rmse(est$multiscale))
+est$region <- coarse[match(est$parcel, fine)]
+rms_error <- function(d) {
+  c(`fine only` = sqrt(mean((d$`fine only` - d$truth)^2)),
+    multiscale = sqrt(mean((d$multiscale - d$truth)^2)))
+}
+# Root-mean-square error, overall and by region
+rms <- cbind(all = rms_error(est), sapply(split(est, est$region), rms_error))
+colnames(rms) <- c("all", sprintf("region %.2f", region_phi))
+round(rms, 3)
 ```
 
-```{r fig-parcels, echo = FALSE, fig.height = 3.6, fig.cap = "Error in the estimated AR(1) coefficient (estimate minus truth) for each of the 24 fine parcels of 4 voxels, grouped by region. Pooling across scales shrinks the largest errors."}
-lev <- c("Fine parcel only", "Multiscale")
-pe <- rbind(
-  data.frame(fit = lev[1], parcel = est$parcel, err = est$`fine only` - est$truth),
-  data.frame(fit = lev[2], parcel = est$parcel, err = est$multiscale - est$truth)
-)
-pe$fit <- factor(pe$fit, levels = lev)
-lim <- max(abs(pe$err)) * 1.1
-regions <- data.frame(fit = factor(lev[1], levels = lev),
-                      parcel = c(4.5, 12.5, 20.5), y = 1.5 * lim,
-                      txt = sprintf("region noise %.2f", region_phi))
+```{r fig-parcels, echo = FALSE, fig.height = 3.4, fig.cap = "Error in the estimated AR(1) coefficient (estimate minus truth) for each of the 24 fine parcels of 4 voxels, grouped by region. Orange: the fine parcel's own estimate. Blue: after multiscale pooling. The grey line joins the two. Above each region: its true coefficient, and its root-mean-square (RMS) error before and after pooling."}
+pe <- data.frame(parcel = est$parcel,
+                 fine = est$`fine only` - est$truth,
+                 multi = est$multiscale - est$truth)
+lim <- max(abs(c(pe$fine, pe$multi)))
+regions <- data.frame(parcel = c(4.5, 12.5, 20.5), y = 1.75 * lim,
+                      txt = sprintf("true %.2f\nRMS %s->%s", region_phi,
+                                    sub("^0", "", sprintf("%.3f", rms["fine only", -1])),
+                                    sub("^0", "", sprintf("%.3f", rms["multiscale", -1]))))
 ggplot(pe, aes(parcel)) +
   geom_vline(xintercept = c(8.5, 16.5), linewidth = 0.3, colour = "grey80") +
   geom_hline(yintercept = 0, linewidth = 0.3, colour = "grey45") +
-  geom_segment(aes(xend = parcel, y = 0, yend = err, colour = fit),
-               linewidth = 0.6) +
-  geom_point(aes(y = err, colour = fit), size = 1.7) +
-  geom_text(data = regions, aes(y = y, label = txt), vjust = 1, size = 3,
-            colour = "grey45") +
-  facet_wrap(~fit, ncol = 1) +
+  geom_segment(aes(xend = parcel, y = fine, yend = multi), linewidth = 0.4,
+               colour = "grey65") +
+  geom_point(aes(y = fine, colour = "Fine parcel only"), size = 1.7) +
+  geom_point(aes(y = multi, colour = "Multiscale"), size = 1.7) +
+  geom_text(data = regions, aes(y = y, label = txt), vjust = 1, size = 2.9,
+            lineheight = 0.95, colour = "grey35") +
   albersdown::scale_color_albers(limits = c("Multiscale", "Fine parcel only"),
                                  guide = "none") +
   scale_x_continuous(breaks = NULL) +
-  coord_cartesian(ylim = c(-lim, 1.5 * lim)) +
+  coord_cartesian(ylim = c(-1.1 * lim, 1.75 * lim)) +
   labs(x = "Fine parcel", y = "Estimate minus truth") +
-  theme(strip.background = element_blank(),
-        strip.text = element_text(hjust = 0),
-        panel.grid.major.x = element_blank())
+  theme(panel.grid.major.x = element_blank())
 ```
 
-Pooling cuts the root-mean-square error by nearly a third here. The price is
-a pull toward the larger parcels: a fine parcel whose noise genuinely
-differs from its region's is drawn part of the way back toward the region,
-so its estimate errs in the region's direction.
+Pooling cuts the overall root-mean-square error from
+`r sprintf("%.3f", rms["fine only", "all"])` to
+`r sprintf("%.3f", rms["multiscale", "all"])`, but not in every region. The
+price is a pull toward the larger parcels. A fine parcel whose noise
+genuinely differs from its region's is drawn part of the way back, and every
+fine parcel inherits whatever error the region's own estimate has: where
+the region estimate is a little off, the pooled estimates of its parcels are
+off in the same direction. Pooling pays most when parcels are small and
+their noise varies little within a region.
 
 ## How the pooling works
 

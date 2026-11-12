@@ -72,35 +72,40 @@ simulate_noise <- function(n_vox, ar, white_sd = 0) {
 ```
 
 ```{r acf-helpers, include = FALSE}
-# Summaries and plot for the per-voxel autocorrelation check
-acf_summary <- function(resid, stage, max_lag = 8) {
-  a <- acorr_diagnostics(resid, runs = runs, max_lag = max_lag,
-                         aggregate = "none")
-  data.frame(stage = stage, lag = a$lags, ci = a$ci,
-             lo = apply(a$acf, 1, quantile, 0.025),
-             mid = apply(a$acf, 1, median),
-             hi = apply(a$acf, 1, quantile, 0.975))
+# Plot for the whiteness check: per-lag voxel ranges against per-lag bands
+check_frame <- function(chk, stage) {
+  data.frame(stage = stage, lag = seq_len(nrow(chk$ac)),
+             lo = apply(chk$ac, 1, quantile, 0.025),
+             mid = apply(chk$ac, 1, median),
+             hi = apply(chk$ac, 1, quantile, 0.975),
+             band_lo = chk$band[1, ], band_hi = chk$band[2, ],
+             outside = chk$outside)
 }
-whitened_resid <- function(plan, X, Y) {
-  w <- whiten_apply(plan, X, Y, runs = runs)
-  w$Y - w$X %*% qr.coef(qr(w$X), w$Y)
-}
-plot_acf_check <- function(acs, good) {
+plot_acf_check <- function(acs, good, label_stage) {
   acs$status <- ifelse(acs$stage %in% good, "Whitened", "OLS")
-  ci <- acs$ci[1]
+  lab <- subset(acs, stage == label_stage & lag <= 2)
+  lab$txt <- sprintf("%.0f%%", 100 * lab$outside)
+  # Put each label beyond the end of its line that leaves the band
+  up <- lab$mid > 0
+  lab$y <- ifelse(up, lab$hi, lab$lo)
+  lab$vj <- ifelse(up, -0.4, 1.4)
+  lab$hj <- ifelse(lab$lag == 1, 0.2, 0.5)       # keep lag 1 inside the panel
   ggplot(acs, aes(lag)) +
-    annotate("rect", xmin = -Inf, xmax = Inf, ymin = -ci, ymax = ci,
-             fill = "grey88") +
+    geom_rect(aes(xmin = lag - 0.38, xmax = lag + 0.38,
+                  ymin = band_lo, ymax = band_hi), fill = "grey88") +
     geom_hline(yintercept = 0, linewidth = 0.3, colour = "grey55") +
     geom_linerange(aes(ymin = lo, ymax = hi, colour = status), linewidth = 0.6) +
     geom_point(aes(y = mid, colour = status), size = 1.7) +
+    geom_text(data = lab, aes(x = lag, y = y, label = txt, vjust = vj, hjust = hj),
+              size = 2.9, colour = "grey30") +
     facet_wrap(~stage, nrow = 1) +
     albersdown::scale_color_albers(limits = c("Whitened", "OLS"), guide = "none") +
     scale_x_continuous(breaks = c(1, 4, 8)) +
+    scale_y_continuous(expand = expansion(mult = c(0.12, 0.12))) +
     labs(x = "Lag (volumes)", y = "Autocorrelation") +
     theme(strip.background = element_blank(),
           strip.text = element_text(hjust = 0),
-          panel.grid.major.x = element_blank())
+          panel.grid.major = element_blank())
 }
 ```
 
@@ -133,24 +138,28 @@ bias <- t(sapply(n_drift, function(k) {
 round(bias, 3)
 ```
 
-```{r fig-bias, echo = FALSE, fig.height = 3.2, fig.cap = "Estimated AR(1) coefficient as drift terms are added to the design. The noise is the same throughout, and its true coefficient is 0.5 (grey line). Without the design, the estimate falls steadily; with design = X, it stays at the truth through 8 drift terms per run."}
+```{r fig-bias, echo = FALSE, fig.height = 3.2, fig.cap = "Estimated AR(1) coefficient as drift terms are added to the design. The noise is the same throughout, and its true coefficient is 0.5. Without the design, the estimate falls steadily; with design = X, it stays at the truth through 8 drift terms per run. The examples in these vignettes use 3."}
 bd <- data.frame(k = rep(bias[, "drift_terms"], 2),
                  phi = c(bias[, "plain"], bias[, "corrected"]),
                  fit = rep(c("OLS", "Whitened"), each = nrow(bias)))
-ends <- bd[bd$k == max(bd$k), ]
-ends$txt <- ifelse(ends$fit == "OLS", "without design", "design = X")
+lab <- data.frame(k = 6, phi = c(bias[bias[, "drift_terms"] == 6, "plain"] - 0.012,
+                                 0.5 + 0.012),
+                  txt = c("without design", "with design = X"))
 ggplot(bd, aes(k, phi, colour = fit)) +
+  geom_vline(xintercept = 3, linewidth = 0.3, colour = "grey85") +
+  annotate("text", x = 3.2, y = min(bias[, "plain"]), label = "used in\nthese examples",
+           hjust = 0, vjust = 0, size = 2.8, lineheight = 0.9, colour = "grey45") +
   geom_hline(yintercept = 0.5, linewidth = 0.4, colour = "grey60") +
   geom_line(linewidth = 0.7) +
   geom_point(size = 1.8) +
-  geom_text(data = ends, aes(label = txt), hjust = 0, nudge_x = 0.4,
-            size = 3.1, colour = "grey25") +
-  annotate("text", x = max(n_drift) + 0.4, y = 0.5, label = "truth", hjust = 0,
-           size = 3.1, colour = "grey45") +
+  geom_text(data = lab, aes(k, phi, label = txt), inherit.aes = FALSE,
+            hjust = c(1, 0.5), vjust = c(1, 0), size = 3.1, colour = "grey25") +
   albersdown::scale_color_albers(limits = c("Whitened", "OLS"), guide = "none") +
-  scale_x_continuous(breaks = n_drift, expand = expansion(add = c(0.5, 3))) +
+  scale_x_continuous(breaks = n_drift) +
+  scale_y_continuous(breaks = c(0.35, 0.4, 0.45, 0.5),
+                     labels = c("0.35", "0.40", "0.45", "0.50 truth")) +
   labs(x = "Cosine drift terms per run", y = "Estimated coefficient") +
-  theme(panel.grid.major.x = element_blank())
+  theme(panel.grid.major = element_blank())
 ```
 
 `design = X` corrects for the projection: `fit_noise()` works out the bias
@@ -158,8 +167,11 @@ that $M$ puts into each lag of the autocovariance and inverts it. The
 correction works with every pooling mode for AR models, and with censoring.
 It needs residuals that really are OLS residuals from `X`; a numerical check
 rejects obvious mismatches. From 10 drift terms per run, the corrected
-estimate starts to slip, because so few degrees of freedom remain per run;
-that many drift terms is unusual.
+estimate starts to slip. The correction is computed up to a lag budget,
+`correction_max_lag` (default 25), and with large designs the longer budget
+makes it less stable. A shorter budget that still covers the noise's
+autocorrelation helps: here, `correction_max_lag = 10` holds the estimate at
+0.50 even with 12 drift terms.
 
 Two helpers expose the same correction. `noise_acvf(resid, design = X)`
 returns the corrected autocovariance itself. `acvf_bias_matrix()` builds the
@@ -186,34 +198,66 @@ X <- make_design(3)
 noise_ar2 <- simulate_noise(2000, ar = c(0.4, 0.2))
 r_ar2 <- lm.fit(X, noise_ar2)$residuals
 
-c(without_design = fit_noise(r_ar2, runs = runs)$order[["p"]],
-  with_design    = fit_noise(r_ar2, runs = runs, design = X)$order[["p"]])
+p_without <- fit_noise(r_ar2, runs = runs)$order[["p"]]
+p_with <- fit_noise(r_ar2, runs = runs, design = X)$order[["p"]]
+c(without_design = p_without, with_design = p_with)
 ```
 
-With the design, the search finds AR(2). Without it, the search goes to the
-highest order it tries, adding four coefficients that describe the
-projection, not the noise.
+With the design, the search finds AR(`r p_with`). Without it, the search
+chooses AR(`r p_without`), adding `r p_without - p_with` coefficients that
+describe the projection, not the noise.
 
 ### Spotting an order that is too low
 
 The whiteness check from *Getting started* shows when an order is too low.
+Here it is as two functions: `whitened()` refits a noise model's whitened
+data and returns the residuals with the whitened design, and `whiteness()`
+compares each voxel's autocorrelations with the white-noise band for that
+design, built by passing pure white noise through the same fit.
+
+```{r whiteness}
+white <- matrix(rnorm(n_time * 2000), n_time)
+
+whitened <- function(plan, Y) {
+  w <- whiten_apply(plan, X, Y, runs = runs)
+  list(resid = w$Y - w$X %*% qr.coef(qr(w$X), w$Y), design = w$X)
+}
+whiteness <- function(resid, design, max_lag = 8) {
+  ac <- acorr_diagnostics(resid, runs = runs, max_lag = max_lag,
+                          aggregate = "none")$acf
+  ref <- acorr_diagnostics(qr.resid(qr(design), white), runs = runs,
+                           max_lag = max_lag, aggregate = "none")$acf
+  band <- apply(ref, 1, quantile, probs = c(0.025, 0.975))
+  list(ac = ac, band = band,
+       outside = rowMeans(ac < band[1, ] | ac > band[2, ]))   # share per lag
+}
+```
+
 Below, the same AR(2) noise is whitened twice: with an AR(1) model, and with
-the AR(2) model the search chose. The AR(1) filter overshoots at lag 1,
-turning a strong positive autocorrelation slightly negative, and leaves a
-positive one at lag 2. At both lags the median voxel falls outside the
-white-noise band.
+the AR(2) model the search chose.
 
 ```{r underfit}
 plan_ar1 <- fit_noise(r_ar2, runs = runs, p = 1, design = X)
 plan_ar2 <- fit_noise(r_ar2, runs = runs, design = X)
+w_ar1 <- whitened(plan_ar1, noise_ar2)
+w_ar2 <- whitened(plan_ar2, noise_ar2)
+
+# Share of voxels outside the band at lags 1 to 3
+round(rbind(`AR(1) fit` = whiteness(w_ar1$resid, w_ar1$design)$outside[1:3],
+            `AR(2) fit` = whiteness(w_ar2$resid, w_ar2$design)$outside[1:3]), 3)
 ```
 
-```{r fig-underfit, echo = FALSE, fig.height = 3.2, fig.cap = "The whiteness check for AR(2) noise: residual autocorrelation after OLS, after an AR(1) filter and after an AR(2) filter. Lines span the middle 95% of voxels; dots mark the median; the grey band is where 95% of one voxel's values fall if its noise is white. The AR(1) filter fails at lags 1 and 2; the AR(2) filter passes."}
-acs <- rbind(acf_summary(r_ar2, "OLS"),
-             acf_summary(whitened_resid(plan_ar1, X, noise_ar2), "AR(1)"),
-             acf_summary(whitened_resid(plan_ar2, X, noise_ar2), "AR(2)"))
-acs$stage <- factor(acs$stage, levels = c("OLS", "AR(1)", "AR(2)"))
-plot_acf_check(acs, good = "AR(2)")
+White noise leaves 5% outside. The AR(1) filter fails at lags 1 and 2: it
+overshoots at lag 1, turning a strong positive autocorrelation negative, and
+leaves a positive one at lag 2. The AR(2) filter passes.
+
+```{r fig-underfit, echo = FALSE, fig.height = 3.3, fig.cap = "The whiteness check for AR(2) noise: residual autocorrelation after OLS, after an AR(1) filter and after an AR(2) filter. Lines span the middle 95% of voxels; dots mark the median; grey boxes are the white-noise band for each fit. The AR(1) filter fails at lags 1 and 2, where the percentages give the share of voxels outside the band; the AR(2) filter passes."}
+lev <- c("OLS", "AR(1) fit", "AR(2) fit")
+acs <- rbind(check_frame(whiteness(r_ar2, X), lev[1]),
+             check_frame(whiteness(w_ar1$resid, w_ar1$design), lev[2]),
+             check_frame(whiteness(w_ar2$resid, w_ar2$design), lev[3]))
+acs$stage <- factor(acs$stage, levels = lev)
+plot_acf_check(acs, good = lev[3], label_stage = lev[2])
 ```
 
 ## Robust standard errors
@@ -259,7 +303,8 @@ noise. An AR(1) process plus white noise is no longer AR(1): it is
 ARMA(1,1), with one autoregressive and one moving-average coefficient. A pure
 AR model can mimic it only with extra coefficients. Below, the noise is
 AR(1) with coefficient 0.8 plus white noise. The design correction is
-available for AR models only, so the ARMA fit omits `design`.
+available for AR models only, so the ARMA fit omits `design` and carries the
+projection bias.
 
 ```{r arma}
 noise_mix <- simulate_noise(2000, ar = 0.8, white_sd = 1)
@@ -275,22 +320,23 @@ plan_arma
 ARMA models are estimated by the Hannan–Rissanen procedure, pooled over
 voxels: each voxel is a replicate series sharing the coefficients, and no
 lag crosses a run boundary or a censored volume. `hr_iter` adds refinement
-iterations.
+iterations. The AR coefficient comes out at
+`r sprintf("%.2f", plan_arma$phi[[1]])` rather than 0.8, partly because of
+the uncorrected projection bias.
 
-The BIC search picked AR(`r plan_ar_auto$order[["p"]]`). ARMA(1,1) does the
-same job with two coefficients. In the table below, both pass the whiteness
-check at lags 1 to 3 (white noise leaves about 5% of voxels outside the
-band), and both give valid tests. A plain AR(1), included for comparison,
-fails at lag 1.
+The BIC search picked AR(`r plan_ar_auto$order[["p"]]`); ARMA(1,1)
+describes the same noise with two coefficients. The table scores each model,
+along with a plain AR(1) for comparison, by the share of voxels outside the
+white-noise band at lags 1 to 3 (white noise leaves 5%) and by the
+false-positive rate.
 
 ```{r arma-compare}
 score <- function(plan) {
-  rw <- whitened_resid(plan, X, noise_mix)
-  a <- acorr_diagnostics(rw, runs = runs, max_lag = 3, aggregate = "none")
+  wh <- whitened(plan, noise_mix)
   w <- whiten_apply(plan, X, noise_mix, runs = runs)
   fit <- lm.fit(w$X, w$Y)
   se <- sandwich_from_whitened_resid(w$X, w$Y, beta = fit$coefficients)$se
-  c(rowMeans(abs(a$acf) > a$ci),
+  c(whiteness(wh$resid, wh$design, max_lag = 3)$outside,
     mean(abs(fit$coefficients["task", ] / se[1, ]) > 1.96))
 }
 plan_ar1_mix <- fit_noise(r_mix, runs = runs, p = 1, design = X)
@@ -301,6 +347,16 @@ colnames(tab) <- c("outside, lag 1", "lag 2", "lag 3", "false positive")
 knitr::kable(tab, digits = 3,
              caption = "Share of voxels outside the white-noise band, and false-positive rate, for AR(1) noise plus white noise.")
 ```
+
+The AR(1) fails clearly. The design-corrected AR model passes. ARMA(1,1)
+fails narrowly at lag 1, with
+`r sprintf("%.0f%%", 100 * tab["ARMA(1,1)", 1])` of voxels outside the band:
+without the design correction, its coefficients carry the projection bias,
+and the filter leaves a little autocorrelation behind. With no drift terms
+in the design, the same ARMA(1,1) fit passes. Its false-positive rate is
+still near 5%, so the leftover autocorrelation is small here; the AR(1)'s
+tests, by contrast, are badly conservative. Where the design has many drift
+terms, a design-corrected AR model is the safer choice.
 
 `method = "arma"` also accepts `p = "auto"` and `q = "auto"`, searching
 `0:p_max` and `0:q_max` by BIC. Pooling thousands of independent voxels
