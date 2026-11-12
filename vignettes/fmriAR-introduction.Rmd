@@ -128,8 +128,8 @@ The result is a whitening *plan*: the fitted noise model, in the form
 Pass `design = X` whenever the residuals come from a fitted model. Fitting
 removes some of the noise along with the effects being modelled, so the
 residuals look less autocorrelated than the noise really is. The bias grows
-with the size of the design, and drift terms cause most of it. `design = X`
-corrects it. Without the correction, a fit that pools thousands of voxels can
+with the size of the design, and slow regressors cause most of it: drift
+terms above all, but also motion parameters. `design = X` corrects it. Without the correction, a fit that pools thousands of voxels can
 also choose an AR order that is too high. *Refining the noise model*
 (`vignette("fmriAR-noise-models")`) demonstrates both problems.
 
@@ -149,14 +149,14 @@ one volume earlier. That removes the part of the noise the previous volume
 predicts and leaves the fresh shock. The first volume of each run has no
 predecessor, so instead it is multiplied by $\sqrt{1 - \phi^2}$, where
 $\phi$ is the AR coefficient. That makes the result exact generalised least
-squares (GLS).
+squares (GLS) for the fitted noise model.
 
 The design must go through the same filter. The model says data = design
 × coefficients + noise. Filtering both sides with the same filter leaves the
 equation, and its coefficients, intact; only the noise changes, and it
 becomes white.
 
-```{r fig-filter, echo = FALSE, fig.height = 3.2, fig.cap = "The task regressor before (grey) and after (blue) whitening, one dot per volume, for three events in run 1. Each blue value is the grey value minus half the grey value one volume earlier; two volumes are worked through. Every voxel's data goes through the same filter."}
+```{r fig-filter, echo = FALSE, fig.height = 3.2, fig.cap = "The task regressor before (grey) and after (blue) whitening, one dot per volume, around one event in run 1. Each blue value is the grey value minus half the grey value one volume earlier; two volumes are worked through. Every voxel's data goes through the same filter."}
 phi1 <- plan$phi[[1]][1]
 pk <- 39 + which.max(X[40:100, "task"])         # tallest event in volumes 40-100
 win <- (pk - 10):(pk + 12)
@@ -188,9 +188,9 @@ ggplot(fd, aes(t)) +
 ```
 
 The whitened regressor peaks one volume earlier than the original, falls
-faster, and dips below zero after each response. A volume that differs from
-its predecessor keeps most of its value; a volume that repeats its
-predecessor loses half. Whitening keeps the changes in a
+faster, and dips below zero after each response. A rising volume keeps most
+of its value, a volume that repeats its predecessor loses half, and a
+falling volume goes negative. Whitening keeps the changes in a
 signal and discounts its slow, sustained parts, because slow fluctuations
 are exactly what autocorrelated noise produces on its own.
 
@@ -208,15 +208,19 @@ t_gls <- gls$coefficients["task", ] / se_gls[1, ]
 Because the simulation records which voxels have an effect, each fit can be
 scored against the truth. Over the 9,000 null voxels, the *reported*
 standard error should match the *actual* spread of the estimates, and 5% of
-the voxels should pass the threshold. The last column, the share of the
-1,000 active voxels that pass, measures sensitivity.
+the voxels should pass the threshold. The last two columns measure
+sensitivity: the share of the 1,000 active voxels that pass at 1.96, and the
+share that pass when each method's threshold is set so that exactly 5% of
+its null voxels pass.
 
 ```{r compare}
 summarise_fit <- function(b, se) {
   c(`reported SE`    = mean(se[1, null]),
     `actual SD`      = sd(b["task", null]),
     `false positive` = mean(abs(b["task", null] / se[1, null]) > 1.96),
-    `true positive`  = mean(abs(b["task", active] / se[1, active]) > 1.96))
+    `true positive`  = mean(abs(b["task", active] / se[1, active]) > 1.96),
+    `at matched 5%`  = mean(abs(b["task", active] / se[1, active]) >
+                              quantile(abs(b["task", null] / se[1, null]), 0.95)))
 }
 knitr::kable(
   rbind(OLS = summarise_fit(ols$coefficients, se_ols),
@@ -229,10 +233,12 @@ knitr::kable(
 OLS reports a standard error well below the actual spread of its estimates,
 and its false-positive rate is
 `r sprintf("%.1f", fpr_ols / 0.05)` times the nominal 5%. After prewhitening, reported
-and actual agree, and the rate is back near 5%. The whitened estimates also
-vary less than the OLS ones, so little real sensitivity is lost: much of
-OLS's higher true-positive rate came from the same too-small standard error
-that produced its false positives.
+and actual agree, and the rate is back near 5%. Whitening costs no real
+sensitivity. Its estimates vary less, because GLS is the more efficient
+estimator, and when both methods are held to the same 5% false-positive
+rate, whitening finds more of the active voxels. OLS's higher raw
+true-positive rate comes entirely from the too-small standard error that
+also produced its false positives.
 
 In relative terms, the excess grows as the threshold tightens. At 0.1%, the
 kind of strict threshold that whole-brain analyses use, OLS passes
@@ -372,7 +378,7 @@ The whitened autocorrelations centre slightly below zero, at about
 comes from fitting the model, not from the noise. Against the textbook range
 $\pm$`ci`, which ignores it, about
 `r sprintf("%.0f%%", 100 * mean(abs(ac_after$acf[1, ]) > ac_after$ci))` of
-whitened voxels would look like failures. The OLS residuals at lags 5 to 10
+whitened voxels would look like failures at lag 1. The OLS residuals at lags 5 to 10
 are also negative, for the same reason.
 
 If some autocorrelation remains, for example because the AR order was too
@@ -384,8 +390,8 @@ standard errors that tolerate it (Newey–West, computed within runs).
 ### Several runs
 
 `pooling = "global"` (the default) fits one noise model to all runs.
-`pooling = "run"` gives each run its own coefficients, which suits runs that
-differ in length or acquisition.
+`pooling = "run"` gives each run its own coefficients, for runs whose noise
+may differ, such as runs from different sessions or sequences.
 
 ```{r pooling-run}
 plan_by_run <- fit_noise(ols$residuals, runs = runs, design = X,
@@ -398,12 +404,23 @@ plan_by_run$phi
 Pass volumes flagged for motion (scrubbed volumes) as `censor`, either as
 indices or as a logical vector with one entry per volume. They are left out
 of the noise estimate, and the filter restarts after each one so that no
-flagged value leaks into its neighbours. The whitened output keeps every row
-and lists the censored rows in `censor`; drop them before fitting.
+flagged value leaks into its neighbours.
+
+Censoring the noise estimate is not enough on its own, though: the first OLS
+fit still sees the flagged volumes, and a large artefact there shifts the
+fitted coefficients and so every residual. Give the first fit one spike
+regressor per flagged volume, which makes their residuals exactly zero, and
+pass that design to `fit_noise()`. The whitened output keeps every row and
+lists the censored rows in `censor`; drop them before the final fit, which
+needs no spike regressors.
 
 ```{r censor}
 scrub <- c(50:52, 170)
-plan_c <- fit_noise(ols$residuals, runs = runs, design = X, censor = scrub)
+spikes <- outer(seq_len(n_time), scrub, "==") * 1   # one column per volume
+X_s <- cbind(X, spikes)
+
+plan_c <- fit_noise(lm.fit(X_s, Y)$residuals, runs = runs, design = X_s,
+                    censor = scrub)
 w_c <- whiten_apply(plan_c, X, Y, runs = runs)
 
 keep <- setdiff(seq_len(n_time), w_c$censor)

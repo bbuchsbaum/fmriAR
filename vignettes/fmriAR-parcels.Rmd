@@ -74,9 +74,12 @@ resid <- lm.fit(X, Y)$residuals
 ```
 
 By default, `fit_noise()` fits one noise model to all voxels. To fit one per
-region, pass `pooling = "parcel"` and a parcel label for every voxel.
-`multiscale = FALSE` keeps each region's estimate as it is; the next section
-explains the alternative.
+region, pass `pooling = "parcel"` and a parcel label for every voxel. Pass
+`multiscale = FALSE` too. Without it, and with the default `p = "auto"`,
+`fit_noise()` pulls each parcel's coefficients 60% of the way toward their
+average across parcels; here that would give
+`r paste(sprintf("%.2f", sapply(fit_noise(resid, runs = runs, design = X, pooling = "parcel", parcels = region)$phi_by_parcel, "[", 1)), collapse = ", ")`
+instead of estimates near the truth.
 
 ```{r plans}
 plan_global <- fit_noise(resid, runs = runs, design = X)
@@ -91,8 +94,9 @@ Each region's estimate matches its truth. A mixture of three AR(1) processes
 is not itself an AR(1), so the global search settles on a longer model whose
 first coefficient lies between the three.
 
-With a noise model per parcel, `whiten_apply()` needs the parcel labels. It
-returns one whitened design per parcel in `X_by`, keyed by parcel ID. The
+With a noise model per parcel, `whiten_apply()` uses the parcel labels
+stored on the plan, or the ones you pass. It returns one whitened design per
+parcel in `X_by`, keyed by parcel ID. The
 data are whitened voxel by voxel, so `Y` keeps its shape. Fit each parcel's
 voxels with that parcel's design:
 
@@ -117,7 +121,7 @@ fp_rate <- rbind(
   global = tapply(abs(task_t(plan_global)) > 1.96, region, mean),
   `per region` = tapply(abs(task_t(plan_region, region)) > 1.96, region, mean)
 )
-colnames(fp_rate) <- sprintf("noise %.2f", region_phi)
+colnames(fp_rate) <- sprintf("AR %.2f", region_phi)
 knitr::kable(fp_rate, digits = 3,
              caption = "False-positive rate by region, at a nominal 5%.")
 ```
@@ -125,8 +129,10 @@ knitr::kable(fp_rate, digits = 3,
 The global model is a compromise between the three regions. It removes too
 much autocorrelation from the least autocorrelated region, whose tests
 become conservative, and too little from the most autocorrelated, whose
-false-positive rate rises above 5%. Separate models bring all three much
-closer to 5%.
+false-positive rate rises above 5%. Separate models bring the two outer
+regions back to about 5%. The middle region, which the global model already
+suited, moves only by chance: with 1,500 voxels, a false-positive rate is
+uncertain by about one percentage point either way.
 
 ## Small parcels and multiscale pooling
 
@@ -136,7 +142,7 @@ three nested scales, and each fine parcel's estimate is combined with the
 estimates of the medium and coarse parcels that contain it.
 
 Here 24 fine parcels of 4 voxels each sit inside 6 medium parcels, which sit
-inside the same 3 regions as before. Each fine parcel's true coefficient is
+inside 3 regions of 32 voxels with the same coefficients as before. Each fine parcel's true coefficient is
 its region's plus a small parcel-specific deviation (standard deviation
 0.03).
 
@@ -226,10 +232,10 @@ $s^\beta / (1 + d)$, where $s$ is the parcel's number of voxels, $\beta$ is
 0.5 by default (argument `beta`), and $d$ is the spread of voxel variances
 within the parcel, measured relative to the median voxel variance so that
 rescaling the data changes nothing. Larger, more homogeneous parcels get
-more weight. The weights are normalised to sum to one, so series length and
-the number of runs, which all three scales share, cancel out. They depend
-only on parcel size and spread, not on how far a fine parcel's estimate is
-from its parents'.
+more weight, so the region usually carries the most and the fine parcel's
+own estimate the least; a smaller `beta` evens the weights and pools less.
+The weights depend only on parcel size and spread, not on how far a fine
+parcel's estimate is from its parents'.
 
 `multiscale = "pacf_weighted"` averages the three scales' partial
 autocorrelations, which always yields a stationary filter.

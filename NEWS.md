@@ -15,6 +15,13 @@
   not towards zero; multiscale weights do not depend on the number of runs;
   `compat$plan_info()` does not return per-run coefficients; the AFNI
   restricted family comes from AFNI's simulation tools, not 3dREMLfit.
+* The censoring recipe now gives the first OLS fit one spike regressor per
+  censored volume, so artefacts in those volumes cannot reach the residuals
+  through the fitted coefficients; rows are dropped with `setdiff()`, which
+  also works when nothing is censored.
+* README rewritten around the problem and the payoff, with the null-t figure;
+  its quick start passes `design = X`, which keeps `p = "auto"` from
+  choosing too high an order when many voxels are pooled.
 
 # fmriAR 0.4.2
 
