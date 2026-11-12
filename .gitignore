@@ -13,3 +13,4 @@ Rplots.pdf
 *.gcda
 *.gcno
 *.gcov
+.albersdown.bak/

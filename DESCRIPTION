@@ -16,10 +16,12 @@ Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3
 Depends: R (>= 4.0)
 Imports: Rcpp, stats, utils
-Suggests: testthat (>= 3.0.0), knitr, rmarkdown, abind, withr
+Suggests: testthat (>= 3.0.0), knitr, rmarkdown, abind, withr,
+    albersdown (>= 2.1.0)
 LinkingTo: Rcpp, RcppArmadillo
 SystemRequirements: OpenMP (optional)
 Config/testthat/edition: 3
 VignetteBuilder: knitr
 URL: https://bbuchsbaum.github.io/fmriAR/, https://github.com/bbuchsbaum/fmriAR
 BugReports: https://github.com/bbuchsbaum/fmriAR/issues
+Config/Needs/website: albersdown

@@ -23,3 +23,5 @@
 ^Rplots\.pdf$
 ^tools$
 ^src/.*\.gc(da|no|ov)$
+^pkgdown$
+^\.albersdown\.bak$

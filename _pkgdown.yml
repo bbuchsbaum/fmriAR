@@ -1,4 +1,5 @@
 url: https://bbuchsbaum.github.io/fmriAR/
 template:
+  package: albersdown
   bootstrap: 5
 
