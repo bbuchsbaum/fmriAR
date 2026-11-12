@@ -227,19 +227,34 @@ test_that("noise_acvf can correct the residual bias", {
   expect_lt(abs(rho(par_cor) - 0.5), abs(rho(par_raw) - 0.5))
 })
 
-test_that("noise_acvf reports whether correction was actually applied", {
+test_that("noise_acvf caps a budget longer than a third of the run", {
   set.seed(62)
   n <- 100L
   X <- cbind(1, poly(seq_len(n), 3))
   R <- qr.resid(qr(X), matrix(rnorm(n * 5L), n, 5L))
 
+  # A 90-lag budget on 100 volumes is capped at a third of the run (33) rather
+  # than solved as given; at that length the corrected estimate is usable.
   expect_warning(
     out <- noise_acvf(R, max_lag = 5L, design = X, correction_max_lag = 90L),
-    "ill-conditioned"
+    "a third"
   )
-  raw <- noise_acvf(R, max_lag = 5L)
-  expect_false(out$corrected)
-  expect_equal(out$acvf, raw$acvf, tolerance = 1e-12)
+  capped <- noise_acvf(R, max_lag = 5L, design = X, correction_max_lag = 33L)
+  expect_true(out$corrected)
+  expect_identical(out$correction, "design")
+  expect_equal(out$acvf, capped$acvf, tolerance = 1e-12)
+  expect_lt(abs(out$acvf[[1]][2] / out$acvf[[1]][1]), 0.15)
+})
+
+test_that("noise_acvf reports which correction ran", {
+  set.seed(64)
+  R <- matrix(rnorm(300 * 4), 300, 4)
+  runs <- rep(1:2, each = 150L)
+  expect_identical(noise_acvf(R, runs = runs)$correction, "centring")
+  expect_identical(noise_acvf(R, runs = runs, design = FALSE)$correction, "none")
+  expect_false(noise_acvf(R, runs = runs)$corrected)
+  # Runs too short for a reliable correction are left as they are.
+  expect_identical(noise_acvf(R[1:20, ])$correction, "none")
 })
 
 test_that("noise_acvf rejects non-finite data and malformed lag budgets", {

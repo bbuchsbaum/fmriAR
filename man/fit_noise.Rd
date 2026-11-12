@@ -23,11 +23,12 @@ fit_noise(
   ms_mode = NULL,
   p_target = NULL,
   beta = 0.5,
+  ms_weights = c("adaptive", "size"),
   hr_iter = 0L,
   step1 = c("burg", "yw"),
   design = NULL,
   acvf_correction = NULL,
-  correction_max_lag = 25L,
+  correction_max_lag = "auto",
   parallel = FALSE
 )
 }
@@ -51,7 +52,11 @@ when computing autocorrelations. Each run's estimation uses only its own valid
 \item{method}{Either "ar" or "arma". ARMA models are estimated by a
 Hannan--Rissanen regression pooled over voxels (every voxel is treated as a
 replicate series sharing the coefficients), with all lags kept inside
-contiguous run/censor segments.}
+contiguous run/censor segments. With \code{design}, the estimate is then
+refitted to the design-corrected autocovariance. The automatic ARMA order
+search (\code{p}/\code{q = "auto"}) tends to choose the largest orders offered when
+many voxels are pooled, and warns when it does; set the orders when theory
+suggests them (AR(1) noise plus white noise is ARMA(1,1)).}
 
 \item{p}{AR order (integer or "auto" if method == "ar"). An explicit order
 is honoured even when it exceeds \code{p_max}.}
@@ -82,42 +87,71 @@ conditional filter with a zero pre-sample.}
 
 \item{parcel_sets}{Optional named list with entries \code{coarse}, \code{medium}, \code{fine} of equal length specifying nested parcel labels for multi-scale pooling.}
 
-\item{multiscale}{Multi-scale pooling mode when \code{parcel_sets} is supplied ("pacf_weighted" or "acvf_pooled"), or \code{TRUE/FALSE} to toggle pooling.}
+\item{multiscale}{Multi-scale pooling under \code{pooling = "parcel"}:
+\code{"pacf_weighted"} (pool partial autocorrelations, which always yields a
+stationary filter) or \code{"acvf_pooled"} (pool autocorrelations and refit),
+or \code{TRUE}/\code{FALSE}. By default, pooling is on (\code{"pacf_weighted"}) when
+\code{parcel_sets} is supplied and off otherwise, whatever \code{p} is. With
+\code{multiscale = TRUE} and no \code{parcel_sets}, each parcel is pooled toward the
+estimate over all voxels.}
 
 \item{ms_mode}{Explicit multiscale mode when \code{multiscale} is logical.}
 
 \item{p_target}{Target AR order for multi-scale pooling (defaults to \code{p_max}).}
 
-\item{beta}{Size exponent for multi-scale weights (default 0.5).}
+\item{beta}{Size exponent for \code{ms_weights = "size"} (default 0.5).}
+
+\item{ms_weights}{How finer scales are pooled toward coarser ones.
+\code{"adaptive"} (default) uses empirical-Bayes weights: each estimate is
+shrunk toward its parent's by \code{tau2 / (tau2 + s2)}, where \code{s2} is its
+sampling variance (from the number of frames and the effective number of
+independent voxels) and \code{tau2} the spread of estimates around their
+parents, estimated from the data. Parcels that genuinely differ keep their
+estimates; small, noisy parcels are pulled toward their parents.
+\code{"size"} uses the weights of earlier versions, proportional to
+\code{size^beta / (1 + dispersion)}, which do not depend on whether the scales
+agree.}
 
 \item{hr_iter}{Number of Hannan--Rissanen refinement iterations for ARMA.}
 
 \item{step1}{Preliminary high-order AR fit method for HR ("burg" or "yw").}
 
-\item{design}{Optional design matrix (timepoints x regressors) whose
-projection produced \code{resid}. Supplying it corrects the downward bias that
-projecting a design out of the data puts into the autocovariance, and
-hence into \code{phi}. Opt-in, because it changes estimates and needs the design
-to be the one that actually formed the OLS residuals. A numerical
-orthogonality check rejects detectable mismatches, including typical raw,
-GLS, robust, or unrelated residuals. Orthogonality cannot prove the exact
-residual-forming provenance, so the caller remains responsible for
-supplying the matching design. Supported for every pooling mode with
-\code{method = "ar"}; under \code{pooling = "parcel"} the per-run bias maps are
-combined in proportion to the lag pairs each run contributes.}
+\item{design}{Design matrix (timepoints x regressors) whose projection
+produced \code{resid}. Supplying it corrects the downward bias that projecting
+a design out of the data puts into the autocovariance, and hence into the
+coefficients; drift terms cause most of it. Pass it whenever \code{resid} came
+from a regression: without it, pooling many voxels can also lead BIC to
+choose too high an order. When \code{resid} is omitted and \code{Y} and \code{X} are
+given, \code{X} is used automatically. Without a design, \code{fit_noise()} still
+corrects the part of the bias its own per-run centring introduces, which
+needs no design; \code{design = FALSE} turns every correction off and returns
+the plain estimator. A numerical orthogonality check rejects detectable
+mismatches, including typical raw, GLS, robust, or unrelated residuals.
+Orthogonality cannot prove the exact residual-forming provenance, so the
+caller remains responsible for supplying the matching design. Supported
+for every pooling mode with \code{method = "ar"}, where under
+\code{pooling = "parcel"} the per-run bias maps are combined in proportion to
+the lag pairs each run contributes, and for \code{method = "arma"}, where the
+Hannan--Rissanen estimate is refitted by minimum distance to the corrected
+autocovariance.}
 
 \item{acvf_correction}{Precomputed bias matrices from \code{\link[=acvf_bias_matrix]{acvf_bias_matrix()}},
 as an alternative to \code{design} when many datasets share one design. A single
 matrix is applied to every run; a list is matched against the runs in
 order. Mutually exclusive with \code{design}.}
 
-\item{correction_max_lag}{Lag budget for the bias correction (default 25).
-The correction solves a system truncated at this lag, so too small a budget
-leaves bias behind; too large a one approaches the run length and makes the
-system ill-conditioned, which is refused with a warning rather than
-solved. A design leaving fewer residual degrees of freedom than the budget
-also cannot support it, and the budget is reduced accordingly, again with a
-warning. Ignored unless \code{design} is supplied.}
+\item{correction_max_lag}{Lag budget for the bias correction: \code{"auto"}
+(default) or a number. The correction solves a system truncated at this
+lag, assuming the noise autocovariance has died out by then, so too short
+a budget leaves bias behind; too long a one makes the system
+ill-conditioned, faster the more drift terms the design has. \code{"auto"}
+starts at 25 and lowers the budget as far as needed for a
+well-conditioned system (reciprocal condition number at least 1e-3).
+A number is used as given unless it exceeds a third of a run's valid
+volumes or makes the system ill-conditioned; it is then lowered the same
+way, with a warning. A warning also reports when the fitted noise model is
+still clearly autocorrelated at the end of the budget, where the
+correction becomes partial.}
 
 \item{parallel}{Reserved for future parallel estimation (logical).}
 }

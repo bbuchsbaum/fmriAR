@@ -1,4 +1,4 @@
-test_that("fit_noise with Y/X matches precomputed residuals", {
+test_that("fit_noise with Y/X matches precomputed residuals plus their design", {
   set.seed(42)
   n <- 160
   runs <- rep(1:2, each = n / 2)
@@ -8,7 +8,10 @@ test_that("fit_noise with Y/X matches precomputed residuals", {
   Y <- matrix(X %*% beta + eps, ncol = 1L)
   resid <- Y - X %*% qr.solve(X, Y)
 
-  plan_resid <- fit_noise(resid = resid, runs = runs, method = "ar", p = "auto", p_max = 4)
+  # Residuals formed from Y and X come from X by construction, so the Y/X path
+  # applies the design correction itself.
+  plan_resid <- fit_noise(resid = resid, runs = runs, method = "ar", p = "auto",
+                          p_max = 4, design = X)
   plan_yx    <- fit_noise(Y = Y, X = X, runs = runs, method = "ar", p = "auto", p_max = 4)
 
   expect_equal(plan_resid$order, plan_yx$order)
@@ -183,8 +186,9 @@ test_that("whiten() matches fit_noise + whiten_apply", {
   eps <- as.numeric(stats::arima.sim(list(ar = 0.3), n = n))
   Y <- matrix(X %*% beta + eps, ncol = 1L)
 
+  # whiten() forms OLS residuals from X itself, so it corrects for X.
   plan <- fit_noise(resid = Y - X %*% qr.solve(X, Y), runs = runs,
-                    method = "ar", p = "auto", p_max = 4)
+                    method = "ar", p = "auto", p_max = 4, design = X)
   manual <- whiten_apply(plan, X, Y, runs = runs, parallel = FALSE)
   shortcut <- whiten(X, Y, runs = runs, method = "ar", p = "auto", p_max = 4)
 

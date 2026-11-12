@@ -220,8 +220,11 @@ test_that("unsupported correction combinations are refused, not silently ignored
 
   expect_error(fit_noise(R, design = X, acvf_correction = acvf_bias_matrix(X, max_lag = 3L)),
                "not both")
+  # ARMA accepts the design correction since 0.5.0, but R here is not OLS
+  # residuals from X, which the orthogonality check still refuses.
   expect_error(fit_noise(R, method = "arma", p = 1L, q = 1L, design = X),
-               "method = 'ar' only")
+               "not orthogonal")
+  expect_error(fit_noise(R, design = FALSE, acvf_correction = diag(4)), "not both")
   expect_error(fit_noise(R, design = X[1:50, , drop = FALSE]),
                "one row per timepoint")
   expect_error(fit_noise(R, acvf_correction = list(diag(4), diag(4), diag(4))),
@@ -393,7 +396,7 @@ test_that("run pooling applies the matching correction to every run", {
   }
 })
 
-test_that("an ill-conditioned correction is refused rather than trusted", {
+test_that("an ill-conditioned budget is lowered rather than trusted", {
   skip_on_cran()
   set.seed(77)
   n <- 300L
@@ -404,18 +407,68 @@ test_that("an ill-conditioned correction is refused rather than trusted", {
 
   # A lag budget near the run length drives rcond(A) to ~5e-9, and solving
   # there returned phi = 0.96 for a truth of 0.5 -- finite and positive, so a
-  # NaN check would have passed it straight through.
-  expect_warning(bad <- fit_noise(R, method = "ar", p = 1L, pooling = "global",
-                                  design = X, correction_max_lag = 250L),
-                 "ill-conditioned")
-  plain <- fit_noise(R, method = "ar", p = 1L, pooling = "global")
-  # Refused means it fell back to the uncorrected estimate exactly.
-  expect_equal(bad$phi[[1]], plain$phi[[1]], tolerance = 1e-12)
-  expect_lt(abs(bad$phi[[1]][1] - 0.5), 0.15)
-
-  # The sane budget is untouched and still corrects.
+  # NaN check would have passed it straight through. The budget is now capped
+  # and lowered until the map is well conditioned, with a warning, instead of
+  # being solved as given or abandoned (which left the full bias in place).
+  msgs <- character(0)
+  bad <- withCallingHandlers(
+    fit_noise(R, method = "ar", p = 1L, pooling = "global", design = X,
+              correction_max_lag = 250L),
+    warning = function(w) {
+      msgs <<- c(msgs, conditionMessage(w))
+      invokeRestart("muffleWarning")
+    })
+  expect_true(any(grepl("ill-conditioned|a third", msgs)))
+  plain <- fit_noise(R, method = "ar", p = 1L, pooling = "global", design = FALSE)
   good <- fit_noise(R, method = "ar", p = 1L, pooling = "global", design = X)
+  expect_lt(abs(bad$phi[[1]][1] - 0.5), abs(plain$phi[[1]][1] - 0.5))
+  expect_lt(abs(bad$phi[[1]][1] - good$phi[[1]][1]), 0.05)
+
+  # The automatic budget still corrects.
   expect_lt(abs(good$phi[[1]][1] - 0.5), abs(plain$phi[[1]][1] - 0.5))
+})
+
+test_that("the automatic budget recovers phi with many drift terms", {
+  skip_on_cran()
+  # Two 150-volume runs, 12 cosines per run: at the old fixed budget of 25 the
+  # corrected estimate slipped to 0.488, and a budget of 50 failed silently.
+  set.seed(7)
+  nr <- 150L
+  runs <- rep(1:2, each = nr)
+  cosines <- function(k) sapply(seq_len(k), function(j) cos(pi * j * (seq_len(nr) - 0.5) / nr))
+  z <- matrix(0, nr, 12L)
+  X <- cbind(runs == 1, runs == 2, rbind(cosines(12L), z), rbind(z, cosines(12L)))
+  E <- replicate(300L, c(stats::arima.sim(list(ar = 0.5), nr),
+                         stats::arima.sim(list(ar = 0.5), nr)))
+  R <- qr.resid(qr(X), E)
+  auto <- fit_noise(R, runs = runs, p = 1L, design = X)
+  expect_lt(abs(auto$phi[[1]][1] - 0.5), 0.015)
+  msgs <- character(0)
+  long <- withCallingHandlers(
+    fit_noise(R, runs = runs, p = 1L, design = X, correction_max_lag = 50L),
+    warning = function(w) {
+      msgs <<- c(msgs, conditionMessage(w))
+      invokeRestart("muffleWarning")
+    })
+  expect_true(any(grepl("ill-conditioned", msgs)))
+  expect_lt(abs(long$phi[[1]][1] - 0.5), 0.02)
+})
+
+test_that("long memory past the correction budget is reported", {
+  skip_on_cran()
+  set.seed(8)
+  nr <- 150L
+  runs <- rep(1:2, each = nr)
+  X <- cbind(runs == 1, runs == 2)
+  E <- replicate(200L, c(stats::arima.sim(list(ar = 0.97), nr),
+                         stats::arima.sim(list(ar = 0.97), nr)))
+  R <- qr.resid(qr(X), E)
+  expect_warning(fit_noise(R, runs = runs, p = 1L, design = X),
+                 "still autocorrelated")
+  # Short memory stays quiet.
+  E2 <- replicate(200L, c(stats::arima.sim(list(ar = 0.4), nr),
+                          stats::arima.sim(list(ar = 0.4), nr)))
+  expect_silent(fit_noise(qr.resid(qr(X), E2), runs = runs, p = 1L, design = X))
 })
 
 test_that("too few residual degrees of freedom caps the lag budget", {
@@ -427,10 +480,15 @@ test_that("too few residual degrees of freedom caps the lag budget", {
   R <- matrix(0, n, 20L)
   for (v in 1:20) R[, v] <- M %*% as.numeric(stats::arima.sim(list(ar = 0.5), n))
 
+  # A requested budget the data cannot support is reported; the automatic
+  # budget makes the same reduction quietly.
   expect_warning(out <- fit_noise(R, method = "ar", p = 1L, pooling = "global",
-                                  design = X),
+                                  design = X, correction_max_lag = 25L),
                  "residual degrees of freedom")
-  plain <- fit_noise(R, method = "ar", p = 1L, pooling = "global")
+  expect_silent(auto <- fit_noise(R, method = "ar", p = 1L, pooling = "global",
+                                  design = X))
+  expect_equal(auto$phi, out$phi)
+  plain <- fit_noise(R, method = "ar", p = 1L, pooling = "global", design = FALSE)
 
   # Uncorrected, a design this rich flattens the noise almost completely: the
   # correction has to restore both the shape and the scale.

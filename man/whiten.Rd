@@ -21,7 +21,11 @@ whiten(X, Y, runs = NULL, censor = NULL, ...)
 List with whitened \code{X} and \code{Y} matrices.
 }
 \description{
-Fit and apply whitening in one call
+Fits OLS of \code{Y} on \code{X}, estimates a noise model from the residuals with
+\code{\link[=fit_noise]{fit_noise()}}, and whitens \code{X} and \code{Y} with it. Because the residuals are
+OLS residuals from \code{X} by construction, \code{X} is passed to \code{\link[=fit_noise]{fit_noise()}} as
+\code{design}, correcting the bias that fitting puts into their
+autocorrelation; pass \code{design = FALSE} to turn the correction off.
 }
 \examples{
 # Create example data

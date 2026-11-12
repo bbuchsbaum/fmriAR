@@ -151,6 +151,7 @@
   phi_by <- setNames(vector("list", length(ids)), ids)
   acvf_by <- setNames(vector("list", length(ids)), ids)
   sigma2_by <- setNames(vector("list", length(ids)), ids)
+  n_eff_by <- setNames(vector("list", length(ids)), ids)
   for (id in ids) {
     Y <- R[, labels == as.integer(id), drop = FALSE]
     fit <- estimator(Y)
@@ -164,6 +165,111 @@
       min(max(lag_id, nrow(correction) - 1L), n - 1L)
     pooled <- .pooled_acvf_segments(Y, seg_id, lag_acc, center_id = center_id)
     acvf_by[[id]] <- .acvf_from_pooled(pooled, order = lag_id, correction = correction)
+    # Frames times effective independent voxels: the evidence behind this
+    # parcel's estimate, for empirical-Bayes pooling.
+    n_eff_by[[id]] <- .bic_n(Y, nrow(Y), groups = center_id)
   }
-  list(phi = phi_by, acvf = acvf_by, sigma2 = sigma2_by)
+  list(phi = phi_by, acvf = acvf_by, sigma2 = sigma2_by, n_eff = n_eff_by)
+}
+
+# Empirical-Bayes pooling across scales ----------------------------------------
+#
+# The size-based weights (.ms_weights) depend only on how many voxels each
+# scale holds, never on whether the scales actually agree. Three regions of
+# 1,500 voxels with AR(1) coefficients 0.20 / 0.45 / 0.70 were each pulled
+# 60% of the way to their common mean (0.35 / 0.45 / 0.55), and their
+# false-positive rates drifted off 5% in both directions.
+#
+# Here each child (finer-scale) estimate is shrunk toward its parent's by
+#   lambda = tau2 / (tau2 + s2),
+# where s2 is the child's sampling variance and tau2 the real spread of
+# children around their parents, estimated by moments from the data and
+# pooled across parents. Children that genuinely differ (tau2 >> s2) keep
+# their own estimates; small, noisy children of a homogeneous parent are
+# pulled most of the way in. Applied lag by lag to partial autocorrelations
+# (pacf_weighted) or autocorrelations (acvf_pooled).
+.ms_eb_shrink <- function(K_child, S2_child, K_parent_of_child) {
+  out <- K_child
+  for (j in seq_len(nrow(K_child))) {
+    dev <- K_child[j, ] - K_parent_of_child[j, ]
+    s2 <- pmax(S2_child[j, ], 0)
+    tau2 <- max(0, mean(dev^2) - mean(s2))
+    lam <- ifelse(tau2 + s2 > 0, tau2 / (tau2 + s2), 1)
+    out[j, ] <- lam * K_child[j, ] + (1 - lam) * K_parent_of_child[j, ]
+  }
+  out
+}
+
+# Per-lag feature matrix (lags x parcels) for one scale: partial
+# autocorrelations, or autocorrelations from the pooled autocovariance.
+.ms_features <- function(est, ids, target, mode) {
+  vapply(ids, function(id) {
+    if (identical(mode, "pacf_weighted")) {
+      .ms_pad(ar_to_pacf(est$phi[[id]]), target)
+    } else {
+      g <- .ms_pad(est$acvf[[id]], target + 1L)
+      if (!is.finite(g[1]) || g[1] <= 0) numeric(target) else g[-1L] / g[1]
+    }
+  }, numeric(target))
+}
+
+# Sampling variance of each feature: (1 - k^2) / N, N = frames x effective
+# number of independent voxels in the parcel.
+.ms_sampling_var <- function(F, n_eff) {
+  N <- matrix(rep(pmax(n_eff, 1), each = nrow(F)), nrow(F))
+  (1 - pmin(F^2, 0.99)) / N
+}
+
+# Turn pooled features back into AR coefficients for each fine parcel.
+.ms_features_to_phi <- function(F, est_fine, ids, mode, yw_order) {
+  setNames(lapply(seq_along(ids), function(i) {
+    if (identical(mode, "pacf_weighted")) {
+      pacf_to_ar(pmin(pmax(F[, i], -0.99), 0.99))
+    } else {
+      if (yw_order == 0L) return(numeric(0))
+      g0 <- est_fine$acvf[[ids[i]]][1]
+      g <- .shrink_to_pd(g0 * c(1, F[seq_len(yw_order), i]))
+      yw <- yw_from_acvf_fast(g[seq_len(yw_order + 1L)], yw_order)
+      enforce_stationary_ar(yw$phi)
+    }
+  }), ids)
+}
+
+# Three-scale empirical-Bayes pooling: medium toward coarse, then fine toward
+# the pooled medium. `parents` maps each fine parcel to its medium and coarse
+# parents (.ms_parent_maps); est_* come from .ms_estimate_scale.
+.ms_combine_eb <- function(est_c, est_m, est_f, parents, target, mode, yw_order) {
+  ids_f <- names(est_f$phi); ids_m <- names(est_m$phi); ids_c <- names(est_c$phi)
+  Fc <- .ms_features(est_c, ids_c, target, mode)
+  Fm <- .ms_features(est_m, ids_m, target, mode)
+  Ff <- .ms_features(est_f, ids_f, target, mode)
+  Fc <- matrix(Fc, nrow = target); Fm <- matrix(Fm, nrow = target)
+  Ff <- matrix(Ff, nrow = target)
+  # Each medium parcel's coarse parent, read off its fine children.
+  fid <- as.integer(ids_f)
+  med_of_f <- parents$parent_medium[fid]
+  coarse_of_f <- parents$parent_coarse[fid]
+  coarse_of_m <- vapply(as.integer(ids_m), function(m) {
+    cc <- coarse_of_f[med_of_f == m]
+    if (length(cc)) as.integer(names(which.max(table(cc)))) else NA_integer_
+  }, 0L)
+  Fm_parent <- Fc[, match(coarse_of_m, as.integer(ids_c)), drop = FALSE]
+  Fm_star <- .ms_eb_shrink(Fm, .ms_sampling_var(Fm, unlist(est_m$n_eff[ids_m])),
+                           Fm_parent)
+  Ff_parent <- Fm_star[, match(med_of_f, as.integer(ids_m)), drop = FALSE]
+  Ff_star <- .ms_eb_shrink(Ff, .ms_sampling_var(Ff, unlist(est_f$n_eff[ids_f])),
+                           Ff_parent)
+  .ms_features_to_phi(Ff_star, est_f, ids_f, mode, yw_order)
+}
+
+# Two-scale version, without parcel_sets: each parcel toward the estimate
+# pooled over all voxels.
+.ms_combine_eb_global <- function(est_g, est_f, target, mode, yw_order) {
+  ids_f <- names(est_f$phi)
+  Ff <- matrix(.ms_features(est_f, ids_f, target, mode), nrow = target)
+  Fg <- matrix(.ms_features(est_g, names(est_g$phi), target, mode), nrow = target)
+  Ff_parent <- Fg[, rep(1L, length(ids_f)), drop = FALSE]
+  Ff_star <- .ms_eb_shrink(Ff, .ms_sampling_var(Ff, unlist(est_f$n_eff[ids_f])),
+                           Ff_parent)
+  .ms_features_to_phi(Ff_star, est_f, ids_f, mode, yw_order)
 }

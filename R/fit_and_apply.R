@@ -277,12 +277,177 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 
 # Solve gamma_raw = A gamma_true for gamma_true.
 #
-# A becomes ill-conditioned as the lag budget approaches the run length: at
-# n = 300 the reciprocal condition number runs 0.28 at lag 25, 3e-3 at lag 100
-# and 5e-9 at lag 250, and that last one returned phi = 0.96 against a truth of
-# 0.5. The blow-up is finite and positive, so checking only for NaN lets it
-# straight through -- refuse on conditioning instead.
-.ACVF_RCOND_MIN <- 1e-6
+# A becomes ill-conditioned as the lag budget grows, and faster the more slow
+# regressors the design carries. The blow-up is finite and positive, so
+# checking only for NaN lets it straight through -- judge conditioning instead.
+#
+# The threshold was calibrated on two 150-volume runs with 3 to 12 cosine drift
+# terms per run and budgets of 10 to 50 lags (AR(1) noise, phi = 0.5). Every
+# matrix with rcond >= 1e-3 recovered phi within 0.003; between 1e-3 and 1e-4
+# estimates began to slip (0.481 with 12 cosines per run at a budget of 20),
+# and below that they failed outright (-0.25 at 1.3e-6, which the earlier
+# 1e-6 threshold let through without a word).
+.ACVF_RCOND_MIN <- 1e-3
+
+# Budget used when correction_max_lag = "auto", and the smallest budget a
+# trimmed correction may fall to before it is abandoned.
+.ACVF_AUTO_BUDGET <- 25L
+.ACVF_MIN_BUDGET <- 8L
+
+# Largest leading block of a bias matrix that meets the conditioning threshold.
+# The map at a shorter budget is exactly the leading (L+1) x (L+1) block of the
+# map at a longer one (each entry depends only on its own pair of lags), so a
+# budget can be lowered by truncation without rebuilding. Conditioning worsens
+# monotonically with the budget in practice, which a bisection exploits.
+# Returns NULL when even the minimum budget is ill-conditioned.
+.trim_correction <- function(A, min_rcond = .ACVF_RCOND_MIN,
+                             min_lag = .ACVF_MIN_BUDGET) {
+  if (is.null(A)) return(NULL)
+  rc_at <- function(L) {
+    tryCatch(rcond(A[seq_len(L + 1L), seq_len(L + 1L), drop = FALSE]),
+             error = function(e) 0)
+  }
+  L0 <- nrow(A) - 1L
+  ok <- function(L) { rc <- rc_at(L); is.finite(rc) && rc >= min_rcond }
+  if (ok(L0)) return(A)
+  lo <- min(as.integer(min_lag), L0)
+  if (lo >= L0 || !ok(lo)) return(NULL)
+  hi <- L0                                  # ok(lo) is TRUE, ok(hi) is FALSE
+  while (hi - lo > 1L) {
+    mid <- (lo + hi) %/% 2L
+    if (ok(mid)) lo <- mid else hi <- mid
+  }
+  A[seq_len(lo + 1L), seq_len(lo + 1L), drop = FALSE]
+}
+
+# Lag budget for the bias correction: "auto" (the default) or a number.
+.correction_budget <- function(x, n) {
+  if (identical(x, "auto")) {
+    return(list(lag = as.integer(min(.ACVF_AUTO_BUDGET, max(1L, n - 1L))),
+                auto = TRUE))
+  }
+  if (is.character(x)) {
+    stop("'correction_max_lag' must be \"auto\" or one finite number >= 1",
+         call. = FALSE)
+  }
+  list(lag = .lag_budget(x, "correction_max_lag", 1, n), auto = FALSE)
+}
+
+# Bias maps for an estimator, one per run, from whichever source applies:
+#   design = FALSE         no correction at all (the plain estimator);
+#   acvf_correction given  the caller's precomputed maps;
+#   design given           the full residual-forming projection;
+#   neither                the per-run centring the estimator itself applies,
+#                          which is known exactly and needs no design.
+# Returns list(maps, source).
+.correction_maps <- function(resid, design, acvf_correction, runs, censor, n,
+                             n_runs, correction_max_lag) {
+  if (isFALSE(design)) {
+    if (!is.null(acvf_correction)) {
+      stop("supply either 'design' or 'acvf_correction', not both")
+    }
+    return(list(maps = NULL, source = "none"))
+  }
+  if (!is.null(design) && !is.null(acvf_correction)) {
+    stop("supply either 'design' or 'acvf_correction', not both")
+  }
+  budget <- .correction_budget(correction_max_lag, n)
+  if (!is.null(acvf_correction)) {
+    maps <- .normalize_correction(acvf_correction, n_runs)
+    return(list(maps = .drop_unusable_corrections(maps, warn_trim = TRUE),
+                source = "supplied"))
+  }
+  if (is.null(design)) {
+    D <- matrix(0, n, 0L)
+    source <- "centring"
+  } else {
+    .validate_design_residuals(resid, design)
+    D <- design
+    source <- "design"
+  }
+  # The centring-only correction is a refinement every fit gets without asking,
+  # so it never warns, and it leaves runs too short to correct reliably alone.
+  centring <- identical(source, "centring")
+  maps <- .acvf_bias_by_run(D, n, runs = runs, censor = censor,
+                            max_lag = budget$lag,
+                            quiet = budget$auto || centring,
+                            min_budget = if (centring) .ACVF_MIN_BUDGET else 1L)
+  if (all(vapply(maps, is.null, logical(1)))) {
+    return(list(maps = NULL, source = if (centring) "none" else source))
+  }
+  list(maps = .drop_unusable_corrections(maps, warn_trim = !budget$auto && !centring,
+                                         warn_skip = !centring),
+       source = source)
+}
+
+# Warn once when the fitted noise model is still clearly autocorrelated at the
+# end of the design correction's lag budget, where the correction assumes the
+# autocovariance has died out. The check uses the model's own implied
+# autocorrelation: the raw residuals cannot show it, because projecting slow
+# regressors out drives their long-lag autocorrelation negative even when the
+# truth is large (0.5 at lag 25 came out as -0.07). The centring-only
+# correction is exempt, since the bias it removes is a small fraction of
+# gamma_0 and a short budget costs little there.
+.TAIL_RHO_WARN <- 0.1
+.check_correction_memory <- function(phi_list, maps, theta_list = NULL) {
+  if (is.null(maps)) return(invisible(NULL))
+  Ls <- vapply(maps, function(A) if (is.null(A)) NA_integer_ else nrow(A) - 1L, 0L)
+  if (all(is.na(Ls))) return(invisible(NULL))
+  L <- min(Ls, na.rm = TRUE)
+  if (is.null(theta_list)) theta_list <- rep(list(numeric(0)), length(phi_list))
+  rho_L <- vapply(seq_along(phi_list), function(i) {
+    phi <- phi_list[[i]]
+    theta <- theta_list[[i]] %||% numeric(0)
+    if (!length(phi) || !all(is.finite(phi))) return(0)
+    g <- tryCatch(arma_acvf_cpp(phi, theta, L), error = function(e) NULL)
+    if (is.null(g) || length(g) < L + 1L || !(g[1] > 0)) return(0)
+    g[L + 1L] / g[1]
+  }, 0)
+  worst <- max(rho_L)
+  if (is.finite(worst) && worst > .TAIL_RHO_WARN) {
+    warning("residual-bias correction: the fitted noise model is still ",
+            "autocorrelated (about ", format(round(worst, 2), nsmall = 2),
+            ") at lag ", L, ", the end of the correction's lag budget. The ",
+            "correction assumes the autocorrelation has died out by then, so ",
+            "it is only partial. Set a longer 'correction_max_lag' if the ",
+            "design allows it, or remove the slowest fluctuations with drift ",
+            "terms.", call. = FALSE)
+  }
+  invisible(worst)
+}
+
+# BIC that reaches the top of its search range is the usual symptom of order
+# selection fooled by residual-projection bias: with thousands of voxels pooled,
+# the small, systematic distortion that fitting a model puts into every lag
+# looks like structure worth more coefficients (AR(2) noise came back AR(6)).
+# The design correction removes the distortion, so the warning names it.
+# Ceilings below 4 are hit legitimately too often to be informative.
+.warn_order_ceiling <- function(selected, p_max) {
+  if (selected >= p_max && p_max >= 4L) {
+    warning(structure(class = c("fmriAR_order_at_ceiling", "warning", "condition"),
+      list(message = paste0(
+        "fit_noise(): BIC chose the largest AR order allowed (p_max = ", p_max,
+        "). Residuals from a fitted model carry a small autocorrelation from ",
+        "the fit itself, and with many voxels pooled BIC can mistake it for ",
+        "real structure. If 'resid' came from a regression, pass that design ",
+        "matrix as 'design'; otherwise consider a larger 'p_max'."),
+        call = NULL)))
+  }
+  invisible(NULL)
+}
+
+# Mean autocorrelation over the last quarter of a pooled, uncorrected lag
+# budget. The correction assumes the noise autocovariance has died out by the
+# end of its budget; a raw tail still well above zero says it has not, and the
+# raw estimate errs low, so the truth is further from zero still.
+.raw_tail_rho <- function(pooled, L) {
+  L <- min(as.integer(L), length(pooled$num) - 1L)
+  if (L < 4L || !(pooled$pairs[1L] > 0)) return(NA_real_)
+  g <- ifelse(pooled$pairs > 0, pooled$num / pooled$pairs, NA_real_)
+  if (!is.finite(g[1L]) || g[1L] <= 0) return(NA_real_)
+  tail <- seq.int(L - ceiling(L / 4) + 1L, L)
+  mean(g[tail + 1L] / g[1L], na.rm = TRUE)
+}
 
 .apply_acvf_correction_result <- function(gamma, A) {
   L <- min(length(gamma), nrow(A))
@@ -343,25 +508,39 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 # Conditioning is a property of the matrix, not of any one solve, so it is
 # checked once per run here rather than on every .acvf_from_pooled() call --
 # otherwise one unusable budget produces the same warning eight times per fit.
-# Dropping the matrix leaves that run uncorrected, which is the honest outcome:
-# the raw estimate is biased but meaningful, and the solve is not.
-.drop_unusable_corrections <- function(corr_by_run) {
+#
+# An ill-conditioned budget is lowered to the largest that is well conditioned
+# rather than abandoned: dropping the correction leaves the full projection
+# bias in place, while a shorter budget removes nearly all of it for noise
+# whose autocorrelation has died out within that many lags. A requested budget
+# that has to be lowered is reported (`warn_trim`); the automatic budget is
+# lowered silently, since choosing it is its job. Only when even the minimum
+# budget is ill-conditioned is the run left uncorrected, with a warning.
+.drop_unusable_corrections <- function(corr_by_run, warn_trim = TRUE,
+                                       warn_skip = TRUE) {
   if (is.null(corr_by_run)) return(NULL)
   nm <- names(corr_by_run)
   out <- lapply(seq_along(corr_by_run), function(i) {
     A <- corr_by_run[[i]]
     if (is.null(A)) return(NULL)
-    rc <- tryCatch(rcond(A), error = function(e) 0)
-    if (!is.finite(rc) || rc < .ACVF_RCOND_MIN) {
-      warning("residual-bias correction skipped for run ",
-              if (is.null(nm)) i else nm[i],
+    label <- if (is.null(nm)) i else nm[i]
+    A_ok <- .trim_correction(A)
+    if (is.null(A_ok)) {
+      rc <- tryCatch(rcond(A), error = function(e) 0)
+      if (isTRUE(warn_skip)) warning("residual-bias correction skipped for run ", label,
               ": the correction matrix is ill-conditioned (rcond = ",
-              format(rc, digits = 3), ") at a lag budget of ", nrow(A) - 1L,
-              ". Lower 'correction_max_lag'. Estimates for this run are ",
-              "uncorrected.", call. = FALSE)
+              format(rc, digits = 3), ") even at a lag budget of ",
+              min(.ACVF_MIN_BUDGET, nrow(A) - 1L),
+              ". Estimates for this run are uncorrected.", call. = FALSE)
       return(NULL)
     }
-    A
+    if (nrow(A_ok) < nrow(A) && isTRUE(warn_trim)) {
+      warning("residual-bias correction for run ", label, ": the correction ",
+              "matrix is ill-conditioned at a lag budget of ", nrow(A) - 1L,
+              " (rcond = ", format(rcond(A), digits = 3), "); using a budget ",
+              "of ", nrow(A_ok) - 1L, " instead.", call. = FALSE)
+    }
+    A_ok
   })
   names(out) <- nm
   out
@@ -654,7 +833,11 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 #' @param method Either "ar" or "arma". ARMA models are estimated by a
 #'   Hannan--Rissanen regression pooled over voxels (every voxel is treated as a
 #'   replicate series sharing the coefficients), with all lags kept inside
-#'   contiguous run/censor segments.
+#'   contiguous run/censor segments. With `design`, the estimate is then
+#'   refitted to the design-corrected autocovariance. The automatic ARMA order
+#'   search (`p`/`q = "auto"`) tends to choose the largest orders offered when
+#'   many voxels are pooled, and warns when it does; set the orders when theory
+#'   suggests them (AR(1) noise plus white noise is ARMA(1,1)).
 #' @param p AR order (integer or "auto" if method == "ar"). An explicit order
 #'   is honoured even when it exceeds `p_max`.
 #' @param q MA order (integer), or `"auto"` (ARMA only) to choose it by BIC
@@ -676,34 +859,62 @@ new_whiten_plan <- function(phi, theta, order, runs, exact_first, method, poolin
 #' @param pooling Combine parameters across runs or parcels ("global", "run", "parcel").
 #' @param parcels Integer vector (length = ncol(resid)) giving fine parcel memberships when `pooling = "parcel"`.
 #' @param parcel_sets Optional named list with entries `coarse`, `medium`, `fine` of equal length specifying nested parcel labels for multi-scale pooling.
-#' @param multiscale Multi-scale pooling mode when `parcel_sets` is supplied ("pacf_weighted" or "acvf_pooled"), or `TRUE/FALSE` to toggle pooling.
+#' @param multiscale Multi-scale pooling under `pooling = "parcel"`:
+#'   `"pacf_weighted"` (pool partial autocorrelations, which always yields a
+#'   stationary filter) or `"acvf_pooled"` (pool autocorrelations and refit),
+#'   or `TRUE`/`FALSE`. By default, pooling is on (`"pacf_weighted"`) when
+#'   `parcel_sets` is supplied and off otherwise, whatever `p` is. With
+#'   `multiscale = TRUE` and no `parcel_sets`, each parcel is pooled toward the
+#'   estimate over all voxels.
 #' @param ms_mode Explicit multiscale mode when `multiscale` is logical.
 #' @param p_target Target AR order for multi-scale pooling (defaults to `p_max`).
-#' @param beta Size exponent for multi-scale weights (default 0.5).
+#' @param beta Size exponent for `ms_weights = "size"` (default 0.5).
+#' @param ms_weights How finer scales are pooled toward coarser ones.
+#'   `"adaptive"` (default) uses empirical-Bayes weights: each estimate is
+#'   shrunk toward its parent's by `tau2 / (tau2 + s2)`, where `s2` is its
+#'   sampling variance (from the number of frames and the effective number of
+#'   independent voxels) and `tau2` the spread of estimates around their
+#'   parents, estimated from the data. Parcels that genuinely differ keep their
+#'   estimates; small, noisy parcels are pulled toward their parents.
+#'   `"size"` uses the weights of earlier versions, proportional to
+#'   `size^beta / (1 + dispersion)`, which do not depend on whether the scales
+#'   agree.
 #' @param hr_iter Number of Hannan--Rissanen refinement iterations for ARMA.
 #' @param step1 Preliminary high-order AR fit method for HR ("burg" or "yw").
-#' @param design Optional design matrix (timepoints x regressors) whose
-#'   projection produced `resid`. Supplying it corrects the downward bias that
-#'   projecting a design out of the data puts into the autocovariance, and
-#'   hence into `phi`. Opt-in, because it changes estimates and needs the design
-#'   to be the one that actually formed the OLS residuals. A numerical
-#'   orthogonality check rejects detectable mismatches, including typical raw,
-#'   GLS, robust, or unrelated residuals. Orthogonality cannot prove the exact
-#'   residual-forming provenance, so the caller remains responsible for
-#'   supplying the matching design. Supported for every pooling mode with
-#'   `method = "ar"`; under `pooling = "parcel"` the per-run bias maps are
-#'   combined in proportion to the lag pairs each run contributes.
+#' @param design Design matrix (timepoints x regressors) whose projection
+#'   produced `resid`. Supplying it corrects the downward bias that projecting
+#'   a design out of the data puts into the autocovariance, and hence into the
+#'   coefficients; drift terms cause most of it. Pass it whenever `resid` came
+#'   from a regression: without it, pooling many voxels can also lead BIC to
+#'   choose too high an order. When `resid` is omitted and `Y` and `X` are
+#'   given, `X` is used automatically. Without a design, `fit_noise()` still
+#'   corrects the part of the bias its own per-run centring introduces, which
+#'   needs no design; `design = FALSE` turns every correction off and returns
+#'   the plain estimator. A numerical orthogonality check rejects detectable
+#'   mismatches, including typical raw, GLS, robust, or unrelated residuals.
+#'   Orthogonality cannot prove the exact residual-forming provenance, so the
+#'   caller remains responsible for supplying the matching design. Supported
+#'   for every pooling mode with `method = "ar"`, where under
+#'   `pooling = "parcel"` the per-run bias maps are combined in proportion to
+#'   the lag pairs each run contributes, and for `method = "arma"`, where the
+#'   Hannan--Rissanen estimate is refitted by minimum distance to the corrected
+#'   autocovariance.
 #' @param acvf_correction Precomputed bias matrices from [acvf_bias_matrix()],
 #'   as an alternative to `design` when many datasets share one design. A single
 #'   matrix is applied to every run; a list is matched against the runs in
 #'   order. Mutually exclusive with `design`.
-#' @param correction_max_lag Lag budget for the bias correction (default 25).
-#'   The correction solves a system truncated at this lag, so too small a budget
-#'   leaves bias behind; too large a one approaches the run length and makes the
-#'   system ill-conditioned, which is refused with a warning rather than
-#'   solved. A design leaving fewer residual degrees of freedom than the budget
-#'   also cannot support it, and the budget is reduced accordingly, again with a
-#'   warning. Ignored unless `design` is supplied.
+#' @param correction_max_lag Lag budget for the bias correction: `"auto"`
+#'   (default) or a number. The correction solves a system truncated at this
+#'   lag, assuming the noise autocovariance has died out by then, so too short
+#'   a budget leaves bias behind; too long a one makes the system
+#'   ill-conditioned, faster the more drift terms the design has. `"auto"`
+#'   starts at 25 and lowers the budget as far as needed for a
+#'   well-conditioned system (reciprocal condition number at least 1e-3).
+#'   A number is used as given unless it exceeds a third of a run's valid
+#'   volumes or makes the system ill-conditioned; it is then lowered the same
+#'   way, with a warning. A warning also reports when the fitted noise model is
+#'   still clearly autocorrelated at the end of the budget, where the
+#'   correction becomes partial.
 #' @param parallel Reserved for future parallel estimation (logical).
 #' @return An object of class `fmriAR_plan` used by [whiten_apply()]. Besides the
 #'   AR/MA coefficients the plan carries the noise scale and shape it was fitted
@@ -775,20 +986,25 @@ fit_noise <- function(resid = NULL,
                       ms_mode = NULL,
                       p_target = NULL,
                       beta = 0.5,
+                      ms_weights = c("adaptive", "size"),
                       hr_iter = 0L,
                       step1 = c("burg", "yw"),
                       design = NULL,
                       acvf_correction = NULL,
-                      correction_max_lag = 25L,
+                      correction_max_lag = "auto",
                       parallel = FALSE) {
 
+  own_design <- NULL
   if (is.null(resid)) {
     if (!is.null(Y) && !is.null(X)) {
       if (!is.matrix(Y)) Y <- as.matrix(Y)
       if (!is.matrix(X)) X <- as.matrix(X)
       stopifnot(nrow(Y) == nrow(X))
-      coef <- qr.solve(X, Y)
-      resid <- Y - X %*% coef
+      # Residuals formed here are OLS residuals from X by construction, so the
+      # design that produced them is known exactly: correct for it unless the
+      # caller chose otherwise.
+      resid <- qr.resid(qr(X), Y)
+      own_design <- X
     } else {
       stop("fit_noise: supply 'resid' or both 'Y' and 'X'")
     }
@@ -799,22 +1015,29 @@ fit_noise <- function(resid = NULL,
   exact_first <- match.arg(exact_first)
   pooling <- match.arg(pooling)
   step1 <- match.arg(step1)
+  if (!is.null(own_design) && is.null(design) && is.null(acvf_correction)) {
+    design <- own_design
+  }
 
+  ms_weights <- match.arg(ms_weights)
+  # Pooling across scales happens when the caller asks for it, or by default
+  # when nested parcel_sets are supplied -- whether p is "auto" or a number.
+  # Earlier versions also pooled without parcel_sets, by a fixed 60% pull
+  # toward the cross-parcel mean, but only when p = "auto"; an explicit p
+  # switched pooling off unless a mode was named.
   ms_modes <- c("pacf_weighted", "acvf_pooled")
   multiscale_mode <- NULL
-  multiscale_explicit <- isTRUE(multiscale) || (!is.logical(multiscale) && length(multiscale) == 1L)
   if (is.logical(multiscale)) {
     if (isTRUE(multiscale)) {
       multiscale_mode <- if (is.null(ms_mode)) "pacf_weighted" else match.arg(ms_mode, ms_modes)
     }
-  } else {
+  } else if (length(multiscale) == 1L) {
     multiscale_mode <- match.arg(multiscale, ms_modes)
+  } else if (!is.null(parcel_sets)) {
+    multiscale_mode <- if (is.null(ms_mode)) "pacf_weighted" else match.arg(ms_mode, ms_modes)
   }
-  if (!is.null(ms_mode) && (!is.logical(multiscale) || isTRUE(multiscale))) {
+  if (!is.null(multiscale_mode) && !is.null(ms_mode)) {
     multiscale_mode <- match.arg(ms_mode, ms_modes)
-  }
-  if (!multiscale_explicit && identical(pooling, "parcel") && !identical(p, "auto")) {
-    multiscale_mode <- NULL
   }
 
   if (!identical(p, "auto")) {
@@ -864,27 +1087,16 @@ fit_noise <- function(resid = NULL,
   run_mats <- lapply(Rsets, function(idx) resid[idx, , drop = FALSE])
 
   # Residual-bias correction. Autocovariance taken from GLM residuals is biased
-  # low because E[ehat ehat'] = M Sigma M; correcting needs the design that
-  # produced the residuals, so it stays opt-in.
-  if (!is.null(design) && !is.null(acvf_correction)) {
-    stop("supply either 'design' or 'acvf_correction', not both")
-  }
-  corr_by_run <- NULL
-  if (!is.null(design) || !is.null(acvf_correction)) {
-    if (!identical(method, "ar")) {
-      stop("residual-bias correction applies to method = 'ar' only")
-    }
-    corr_by_run <- if (!is.null(design)) {
-      correction_lag <- .lag_budget(correction_max_lag,
-                                    "correction_max_lag", 1, n)
-      .validate_design_residuals(resid, design)
-      .acvf_bias_by_run(design, n, runs = runs, censor = censor,
-                        max_lag = correction_lag)
-    } else {
-      .normalize_correction(acvf_correction, length(Rsets))
-    }
-    corr_by_run <- .drop_unusable_corrections(corr_by_run)
-  }
+  # low because E[ehat ehat'] = M Sigma M. With the design that produced the
+  # residuals the bias is undone in full; without it, the part this estimator
+  # introduces itself -- the per-run mean removal -- is still known exactly and
+  # is undone. `design = FALSE` returns the plain estimator.
+  corr_info <- .correction_maps(resid, design, acvf_correction, runs = runs,
+                                censor = censor, n = n, n_runs = length(Rsets),
+                                correction_max_lag = correction_max_lag)
+  corr_by_run <- corr_info$maps
+  corr_source <- corr_info$source
+
 
   est_run <- function(mat, censor_rel = integer(0L), corr = NULL) {
     # Get valid (non-censored) segments for estimation
@@ -988,16 +1200,30 @@ fit_noise <- function(resid = NULL,
       qq <- arma_grid$q
 
       lag_ma <- max(1L, max(pp) + max(qq))
-      pooled_ma <- .pooled_acvf_segments(mat_valid, seg_id_ma, lag_ma)
-      gamma_ma <- .acvf_from_pooled(pooled_ma, order = lag_ma)
+      lag_acc <- if (is.null(corr)) lag_ma else
+        min(max(lag_ma, nrow(corr) - 1L), nrow(mat_valid) - 1L)
+      pooled_ma <- .pooled_acvf_segments(mat_valid, seg_id_ma, lag_acc)
+      gamma_ma <- .acvf_from_pooled(pooled_ma, order = lag_ma, correction = corr)
+      # The design-corrected autocovariance over the whole correction budget,
+      # which the ARMA coefficients are refitted to (see .arma_refine_acvf).
+      gamma_corr <- if (!is.null(corr) && corr_source %in% c("design", "supplied")) {
+        .acvf_from_pooled(pooled_ma, order = nrow(corr) - 1L, correction = corr,
+                          tol = -Inf)
+      } else NULL
 
       if (identical(pooling, "global")) {
         # Estimated once over all runs below.
         return(list(phi = numeric(0), theta = numeric(0),
                     order = c(p = max(pp), q = max(qq)), gamma = gamma_ma,
-                    sigma2 = NA_real_, unit = unit))
+                    sigma2 = NA_real_, unit = unit, gamma_corr = gamma_corr))
       }
       fit <- .hr_arma_pooled(list(unit), pp, qq, iter = as.integer(hr_iter))
+      if (!is.null(gamma_corr) && isTRUE(fit$ok)) {
+        ref <- .arma_refine_acvf(gamma_corr, fit$phi, fit$theta)
+        if (!is.null(ref)) {
+          fit$phi <- ref$phi; fit$theta <- ref$theta; fit$sigma2 <- ref$sigma2
+        }
+      }
       fit$gamma <- gamma_ma
       fit$unit <- unit
       fit
@@ -1031,16 +1257,12 @@ fit_noise <- function(resid = NULL,
     # than the voxel noise the plan is applied to.
     resid_valid <- resid[seg$idx, , drop = FALSE]
 
-    target <- if (is.null(p_target)) {
-      if (identical(p, "auto")) {
-        p_max
-      } else if (multiscale_explicit) {
-        min(as.integer(p), p_max)
-      } else {
-        p_max
-      }
-    } else {
+    target <- if (!is.null(p_target)) {
       min(as.integer(p_target), p_max)
+    } else if (identical(p, "auto")) {
+      p_max
+    } else {
+      min(as.integer(p), p_max)
     }
 
     if (is.null(parcel_sets)) {
@@ -1049,29 +1271,15 @@ fit_noise <- function(resid = NULL,
                                   correction = corr_pool)
       if (is.null(multiscale_mode) || target == 0L) {
         phi_parcel <- est_f$phi
-      } else if (identical(multiscale_mode, "pacf_weighted")) {
-        shrink <- 0.6
-        kap_mat <- do.call(cbind, lapply(est_f$phi, function(phi) .ms_pad(ar_to_pacf(phi), target)))
-        if (!is.matrix(kap_mat)) kap_mat <- matrix(kap_mat, nrow = target)
-        avg_kap <- if (target > 0L) rowMeans(kap_mat, na.rm = TRUE) else numeric(0)
-        avg_kap <- pmin(pmax(avg_kap, -0.99), 0.99)
-        phi_parcel <- lapply(est_f$phi, function(phi) {
-          kap_f <- .ms_pad(ar_to_pacf(phi), target)
-          kap_mix <- (1 - shrink) * kap_f + shrink * avg_kap
-          pacf_to_ar(pmin(pmax(kap_mix, -0.99), 0.99))
-        })
       } else {
-        shrink <- 0.6
-        acvf_mat <- vapply(est_f$acvf, function(g) .ms_pad(g, target + 1L), numeric(target + 1L))
-        avg_g <- rowMeans(acvf_mat, na.rm = TRUE)
-        yw_order <- .ms_yw_order(p, target, list(est_f$phi))
-        phi_parcel <- lapply(est_f$acvf, function(g) {
-          if (yw_order == 0L) return(numeric(0))
-          g_pad <- .ms_pad(g, target + 1L)
-          g_mix <- (1 - shrink) * g_pad + shrink * avg_g
-          yw <- yw_from_acvf_fast(g_mix[seq_len(yw_order + 1L)], yw_order)
-          enforce_stationary_ar(yw$phi)
-        })
+        # Without a hierarchy, pool each parcel toward the estimate over all
+        # voxels, by empirical-Bayes weights (see .ms_eb_shrink).
+        est_g <- .ms_estimate_scale(resid_valid, rep(1L, ncol(resid_valid)),
+                                    estimator, run_starts0, lag_max = target,
+                                    center_id = seg$run_id, correction = corr_pool)
+        phi_parcel <- .ms_combine_eb_global(
+          est_g, est_f, target, multiscale_mode,
+          yw_order = .ms_yw_order(p, target, list(est_g$phi, est_f$phi)))
       }
     } else {
       required_keys <- c("coarse", "medium", "fine")
@@ -1111,6 +1319,10 @@ fit_noise <- function(resid = NULL,
       )
       if (is.null(multiscale_mode)) {
         phi_parcel <- est_f$phi
+      } else if (identical(ms_weights, "adaptive")) {
+        phi_parcel <- .ms_combine_eb(
+          est_c, est_m, est_f, parents, target, multiscale_mode,
+          yw_order = .ms_yw_order(p, target, list(est_c$phi, est_m$phi, est_f$phi)))
       } else {
         phi_parcel <- .ms_combine_to_fine(
           phi_by_coarse = est_c$phi,
@@ -1182,6 +1394,11 @@ fit_noise <- function(resid = NULL,
 
     parcel_ids <- names(phi_parcel)
     if (is.null(parcel_ids)) parcel_ids <- as.character(sort(unique(parcels)))
+    if (corr_source %in% c("design", "supplied")) {
+      .check_correction_memory(phi_parcel, corr_by_run)
+    } else if (identical(p, "auto")) {
+      .warn_order_ceiling(order_vec[["p"]], as.integer(p_max))
+    }
     return(new_whiten_plan(
       phi = NULL,
       theta = NULL,
@@ -1236,6 +1453,21 @@ fit_noise <- function(resid = NULL,
       phi_pooled <- fit$phi
       theta_pooled <- fit$theta
       arma_sigma2 <- fit$sigma2
+      # With a design correction, refit to the runs' pooled corrected
+      # autocorrelation, weighted by surviving frames as the AR path does.
+      gc <- lapply(estimates, `[[`, "gamma_corr")
+      okc <- !vapply(gc, is.null, logical(1)) & lens > 0
+      if (any(okc) && isTRUE(fit$ok)) {
+        Lc <- min(vapply(gc[okc], length, 0L))
+        wc <- lens[okc] / sum(lens[okc])
+        Rho <- do.call(rbind, lapply(gc[okc], function(g) g[seq_len(Lc)] / g[1]))
+        g0 <- sum(wc * vapply(gc[okc], function(g) g[1], 0))
+        g_pool <- g0 * as.numeric(drop(crossprod(wc, Rho)))
+        ref <- .arma_refine_acvf(g_pool, phi_pooled, theta_pooled)
+        if (!is.null(ref)) {
+          phi_pooled <- ref$phi; theta_pooled <- ref$theta; arma_sigma2 <- ref$sigma2
+        }
+      }
     } else {
       # Yule-Walker on the run-pooled autocovariance rather than averaging
       # per-run coefficients: averaged coefficients need not be stationary,
@@ -1291,6 +1523,28 @@ fit_noise <- function(resid = NULL,
     c(p = length(phi_list[[1]]), q = length(theta_list[[1]]))
   } else {
     c(p = max(vapply(phi_list, length, 0L)), q = max(vapply(theta_list, length, 0L)))
+  }
+  if (corr_source %in% c("design", "supplied")) {
+    .check_correction_memory(phi_list, corr_by_run, theta_list)
+  } else if (identical(method, "ar") && identical(p, "auto")) {
+    .warn_order_ceiling(order_vec[["p"]], as.integer(p_max))
+  }
+  if (identical(method, "arma") && (identical(p, "auto") || identical(q, "auto"))) {
+    # Low ceilings are reached legitimately (the default q_max is 2), so only
+    # ceilings high enough to be implausible for fMRI noise are reported.
+    hit_p <- identical(p, "auto") && order_vec[["p"]] >= as.integer(p_max) && p_max >= 4L
+    hit_q <- identical(q, "auto") && order_vec[["q"]] >= as.integer(q_max) && q_max >= 3L
+    if (hit_p || hit_q) {
+      warning(structure(class = c("fmriAR_order_at_ceiling", "warning", "condition"),
+        list(message = paste0(
+          "fit_noise(): the ARMA order search chose the largest order allowed (",
+          if (hit_p) paste0("p_max = ", p_max) else "",
+          if (hit_p && hit_q) ", " else "",
+          if (hit_q) paste0("q_max = ", q_max) else "",
+          "). Its BIC is computed on a regression with estimated innovations, ",
+          "and with many voxels pooled the approximation error looks like ",
+          "structure. Set 'p' and 'q' explicitly."), call = NULL)))
+    }
   }
 
   new_whiten_plan(
@@ -1509,6 +1763,12 @@ whiten_apply <- function(plan, X, Y, runs = NULL, run_starts = NULL, censor = NU
 
 #' Fit and apply whitening in one call
 #'
+#' Fits OLS of `Y` on `X`, estimates a noise model from the residuals with
+#' [fit_noise()], and whitens `X` and `Y` with it. Because the residuals are
+#' OLS residuals from `X` by construction, `X` is passed to [fit_noise()] as
+#' `design`, correcting the bias that fitting puts into their
+#' autocorrelation; pass `design = FALSE` to turn the correction off.
+#'
 #' @param X Design matrix (time x regressors).
 #' @param Y Data matrix (time x voxels).
 #' @param runs Optional run labels.
@@ -1528,7 +1788,16 @@ whiten_apply <- function(plan, X, Y, runs = NULL, run_starts = NULL, censor = NU
 #' whitened <- whiten(X, Y, method = "ar", p = 2)
 #' @export
 whiten <- function(X, Y, runs = NULL, censor = NULL, ...) {
-  res <- Y - X %*% qr.solve(X, Y)
-  plan <- fit_noise(resid = res, runs = runs, censor = censor, ...)
+  if (!is.matrix(X)) X <- as.matrix(X)
+  if (!is.matrix(Y)) Y <- as.matrix(Y)
+  dots <- list(...)
+  res <- qr.resid(qr(X), Y)
+  # The residuals are OLS residuals from X by construction, so the design that
+  # biases their autocorrelation is known exactly; correct for it unless the
+  # caller supplied a correction of their own or turned it off (design = FALSE).
+  if (!("design" %in% names(dots)) && !("acvf_correction" %in% names(dots))) {
+    dots$design <- X
+  }
+  plan <- do.call(fit_noise, c(list(resid = res, runs = runs, censor = censor), dots))
   whiten_apply(plan, X, Y, runs = runs, censor = censor)
 }

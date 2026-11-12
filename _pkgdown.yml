@@ -1,4 +1,12 @@
 url: https://bbuchsbaum.github.io/fmriAR/
 template:
+  package: albersdown
   bootstrap: 5
 
+articles:
+- title: Guides
+  navbar: ~
+  contents:
+  - fmriAR-introduction
+  - fmriAR-noise-models
+  - fmriAR-parcels

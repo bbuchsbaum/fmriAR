@@ -12,7 +12,7 @@ noise_acvf(
   pooling = c("global", "run", "parcel"),
   parcels = NULL,
   design = NULL,
-  correction_max_lag = 25L
+  correction_max_lag = "auto"
 )
 }
 \arguments{
@@ -36,12 +36,14 @@ residuals must be ordinary least-squares residuals numerically orthogonal
 to this design. A numerical check rejects detectable mismatches, but
 orthogonality alone cannot prove the residual-forming provenance; the
 caller must supply the matching design. When supplied the residual bias is
-corrected; see \code{\link[=acvf_bias_matrix]{acvf_bias_matrix()}}.}
+corrected; see \code{\link[=acvf_bias_matrix]{acvf_bias_matrix()}}. Without it, the bias from the per-run
+centring is still corrected, as in \code{\link[=fit_noise]{fit_noise()}}; \code{design = FALSE} returns
+the plain estimator.}
 
-\item{correction_max_lag}{Lag budget used to estimate and undo residual
-projection bias when \code{design} is supplied. This is independent of
-\code{max_lag}: correction needs enough tail information even when only a few
-output lags are requested.}
+\item{correction_max_lag}{Lag budget used to estimate and undo the bias:
+\code{"auto"} (default) or a number, as in \code{\link[=fit_noise]{fit_noise()}}. This is independent
+of \code{max_lag}: correction needs enough tail information even when only a
+few output lags are requested.}
 }
 \value{
 An object of class \code{fmriAR_acvf}: a list with
@@ -51,7 +53,10 @@ An object of class \code{fmriAR_acvf}: a list with
 consumer can tell an estimate backed by thousands of pairs from one
 backed by three.
 \item \code{n_segments}, \code{segment_lengths}: the segmentation actually used.
-\item \code{max_lag}, \code{pooling}, \code{corrected}.
+\item \code{max_lag}, \code{pooling}.
+\item \code{corrected}: \code{TRUE} when the design correction was applied.
+\item \code{correction}: which correction was applied: \code{"design"},
+\code{"centring"} (no design given), or \code{"none"}.
 }
 Lags with no surviving pairs are dropped rather than reported as zero.
 }

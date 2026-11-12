@@ -1,7 +1,7 @@
 Package: fmriAR
 Type: Package
 Title: Fast AR and ARMA Noise Whitening for Functional MRI (fMRI) Design and Data
-Version: 0.4.2
+Version: 0.5.0
 Authors@R: person("Bradley", "Buchsbaum", email = "brad.buchsbaum@gmail.com", role = c("aut", "cre", "cph"))
 Description: Lightweight utilities to estimate autoregressive (AR) and
     autoregressive moving average (ARMA) noise models from residuals and apply
@@ -16,10 +16,12 @@ Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3
 Depends: R (>= 4.0)
 Imports: Rcpp, stats, utils
-Suggests: testthat (>= 3.0.0), knitr, rmarkdown, abind, withr
+Suggests: testthat (>= 3.0.0), knitr, rmarkdown, abind, withr,
+    albersdown (>= 2.1.0), ggplot2
 LinkingTo: Rcpp, RcppArmadillo
 SystemRequirements: OpenMP (optional)
 Config/testthat/edition: 3
 VignetteBuilder: knitr
 URL: https://bbuchsbaum.github.io/fmriAR/, https://github.com/bbuchsbaum/fmriAR
 BugReports: https://github.com/bbuchsbaum/fmriAR/issues
+Config/Needs/website: albersdown
