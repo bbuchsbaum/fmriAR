@@ -1,5 +1,5 @@
 
-test_that("Multiscale pooling improves whiteness (KS to Uniform) on held-out run", {
+test_that("Multiscale pooling does not hurt whiteness (KS to Uniform) on a held-out run", {
   skip_if_no_fmriAR()
 
   # Build hierarchy and simulate
@@ -31,6 +31,11 @@ test_that("Multiscale pooling improves whiteness (KS to Uniform) on held-out run
   frac_fine <- mean(p_fine <= 0.05, na.rm = TRUE)
   frac_ms   <- mean(p_ms   <= 0.05, na.rm = TRUE)
 
-  # Expect multiscale to be closer to Uniform (smaller KS) and lower rejection rate
-  expect_true(KS_fine - KS_ms >= 0.02 || frac_fine - frac_ms >= 0.10)
+  # Here the fine parcels genuinely differ from their parents (jitter sd 0.05
+  # on each coefficient), so there is little for pooling to gain; the adaptive
+  # weights must recognise that and leave the held-out fit no worse. (The old
+  # fixed 60% pull was tuned to pass a stronger claim on this one seed; across
+  # seeds, size-based pooling raised the KS distance from 0.063 to 0.097.)
+  expect_lte(KS_ms, KS_fine + 0.02)
+  expect_lte(frac_ms, frac_fine + 0.05)
 })

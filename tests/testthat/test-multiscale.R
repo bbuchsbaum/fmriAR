@@ -20,7 +20,11 @@ test_that("parcel whitening returns expected structure", {
   expect_equal(dim(out$Y), dim(Y))
 })
 
-test_that("multiscale pooling improves whiteness", {
+test_that("multiscale pooling improves whiteness on held-out data", {
+  # Pooling trades a little in-sample fit for stability, so it is judged on
+  # data the plan was not fitted to. (An earlier version of this test scored
+  # the training data, where an unpooled fit always looks best; it passed only
+  # because the "fine" plan was itself silently shrunk 60% toward the mean.)
   set.seed(11)
   n <- 400
   v <- 120
@@ -30,28 +34,27 @@ test_that("multiscale pooling improves whiteness", {
 
   phi_coarse <- runif(6, 0.3, 0.8)
   phi_vox <- phi_coarse[parcels_coarse] + rnorm(v, 0, 0.03)
-
-  noise <- matrix(rnorm(n * v), n, v)
-  Y <- noise
-  for (j in seq_len(v)) {
-    for (t in 2:n) {
-      Y[t, j] <- phi_vox[j] * Y[t - 1, j] + noise[t, j]
+  sim <- function() {
+    noise <- matrix(rnorm(n * v), n, v)
+    Y <- noise
+    for (j in seq_len(v)) {
+      for (t in 2:n) Y[t, j] <- phi_vox[j] * Y[t - 1, j] + noise[t, j]
     }
+    Y
   }
+  Y <- sim()
+  Y_test <- sim()
   X <- cbind(1, rnorm(n))
   res <- Y - X %*% qr.solve(X, Y)
 
   plan_f <- fit_noise(res, runs = NULL, method = "ar", p = "auto", p_max = 4,
                       pooling = "parcel", parcels = parcels_fine)
-  out_f <- whiten_apply(plan_f, X, Y, parcels = parcels_fine)
-
   plan_ms <- fit_noise(res, runs = NULL, method = "ar", p = "auto", p_max = 4,
                        pooling = "parcel", parcels = parcels_fine,
                        parcel_sets = list(coarse = parcels_coarse,
                                           medium = parcels_medium,
                                           fine = parcels_fine),
-                       multiscale = "pacf_weighted", beta = 0.5)
-  out_ms <- whiten_apply(plan_ms, X, Y, parcels = parcels_fine)
+                       multiscale = "pacf_weighted")
 
   whiteness <- function(Yw) {
     apply(Yw, 2, function(y) {
@@ -60,8 +63,8 @@ test_that("multiscale pooling improves whiteness", {
     }) |> mean()
   }
 
-  m_f <- whiteness(out_f$Y)
-  m_ms <- whiteness(out_ms$Y)
+  m_f <- whiteness(whiten_apply(plan_f, X, Y_test, parcels = parcels_fine)$Y)
+  m_ms <- whiteness(whiten_apply(plan_ms, X, Y_test, parcels = parcels_fine)$Y)
 
   expect_lte(m_ms, m_f)
 })

@@ -954,6 +954,7 @@ fit_noise <- function(resid = NULL,
                       ms_mode = NULL,
                       p_target = NULL,
                       beta = 0.5,
+                      ms_weights = c("adaptive", "size"),
                       hr_iter = 0L,
                       step1 = c("burg", "yw"),
                       design = NULL,
@@ -986,21 +987,25 @@ fit_noise <- function(resid = NULL,
     design <- own_design
   }
 
+  ms_weights <- match.arg(ms_weights)
+  # Pooling across scales happens when the caller asks for it, or by default
+  # when nested parcel_sets are supplied -- whether p is "auto" or a number.
+  # Earlier versions also pooled without parcel_sets, by a fixed 60% pull
+  # toward the cross-parcel mean, but only when p = "auto"; an explicit p
+  # switched pooling off unless a mode was named.
   ms_modes <- c("pacf_weighted", "acvf_pooled")
   multiscale_mode <- NULL
-  multiscale_explicit <- isTRUE(multiscale) || (!is.logical(multiscale) && length(multiscale) == 1L)
   if (is.logical(multiscale)) {
     if (isTRUE(multiscale)) {
       multiscale_mode <- if (is.null(ms_mode)) "pacf_weighted" else match.arg(ms_mode, ms_modes)
     }
-  } else {
+  } else if (length(multiscale) == 1L) {
     multiscale_mode <- match.arg(multiscale, ms_modes)
+  } else if (!is.null(parcel_sets)) {
+    multiscale_mode <- if (is.null(ms_mode)) "pacf_weighted" else match.arg(ms_mode, ms_modes)
   }
-  if (!is.null(ms_mode) && (!is.logical(multiscale) || isTRUE(multiscale))) {
+  if (!is.null(multiscale_mode) && !is.null(ms_mode)) {
     multiscale_mode <- match.arg(ms_mode, ms_modes)
-  }
-  if (!multiscale_explicit && identical(pooling, "parcel") && !identical(p, "auto")) {
-    multiscale_mode <- NULL
   }
 
   if (!identical(p, "auto")) {
@@ -1220,16 +1225,12 @@ fit_noise <- function(resid = NULL,
     # than the voxel noise the plan is applied to.
     resid_valid <- resid[seg$idx, , drop = FALSE]
 
-    target <- if (is.null(p_target)) {
-      if (identical(p, "auto")) {
-        p_max
-      } else if (multiscale_explicit) {
-        min(as.integer(p), p_max)
-      } else {
-        p_max
-      }
-    } else {
+    target <- if (!is.null(p_target)) {
       min(as.integer(p_target), p_max)
+    } else if (identical(p, "auto")) {
+      p_max
+    } else {
+      min(as.integer(p), p_max)
     }
 
     if (is.null(parcel_sets)) {
@@ -1238,29 +1239,15 @@ fit_noise <- function(resid = NULL,
                                   correction = corr_pool)
       if (is.null(multiscale_mode) || target == 0L) {
         phi_parcel <- est_f$phi
-      } else if (identical(multiscale_mode, "pacf_weighted")) {
-        shrink <- 0.6
-        kap_mat <- do.call(cbind, lapply(est_f$phi, function(phi) .ms_pad(ar_to_pacf(phi), target)))
-        if (!is.matrix(kap_mat)) kap_mat <- matrix(kap_mat, nrow = target)
-        avg_kap <- if (target > 0L) rowMeans(kap_mat, na.rm = TRUE) else numeric(0)
-        avg_kap <- pmin(pmax(avg_kap, -0.99), 0.99)
-        phi_parcel <- lapply(est_f$phi, function(phi) {
-          kap_f <- .ms_pad(ar_to_pacf(phi), target)
-          kap_mix <- (1 - shrink) * kap_f + shrink * avg_kap
-          pacf_to_ar(pmin(pmax(kap_mix, -0.99), 0.99))
-        })
       } else {
-        shrink <- 0.6
-        acvf_mat <- vapply(est_f$acvf, function(g) .ms_pad(g, target + 1L), numeric(target + 1L))
-        avg_g <- rowMeans(acvf_mat, na.rm = TRUE)
-        yw_order <- .ms_yw_order(p, target, list(est_f$phi))
-        phi_parcel <- lapply(est_f$acvf, function(g) {
-          if (yw_order == 0L) return(numeric(0))
-          g_pad <- .ms_pad(g, target + 1L)
-          g_mix <- (1 - shrink) * g_pad + shrink * avg_g
-          yw <- yw_from_acvf_fast(g_mix[seq_len(yw_order + 1L)], yw_order)
-          enforce_stationary_ar(yw$phi)
-        })
+        # Without a hierarchy, pool each parcel toward the estimate over all
+        # voxels, by empirical-Bayes weights (see .ms_eb_shrink).
+        est_g <- .ms_estimate_scale(resid_valid, rep(1L, ncol(resid_valid)),
+                                    estimator, run_starts0, lag_max = target,
+                                    center_id = seg$run_id, correction = corr_pool)
+        phi_parcel <- .ms_combine_eb_global(
+          est_g, est_f, target, multiscale_mode,
+          yw_order = .ms_yw_order(p, target, list(est_g$phi, est_f$phi)))
       }
     } else {
       required_keys <- c("coarse", "medium", "fine")
@@ -1300,6 +1287,10 @@ fit_noise <- function(resid = NULL,
       )
       if (is.null(multiscale_mode)) {
         phi_parcel <- est_f$phi
+      } else if (identical(ms_weights, "adaptive")) {
+        phi_parcel <- .ms_combine_eb(
+          est_c, est_m, est_f, parents, target, multiscale_mode,
+          yw_order = .ms_yw_order(p, target, list(est_c$phi, est_m$phi, est_f$phi)))
       } else {
         phi_parcel <- .ms_combine_to_fine(
           phi_by_coarse = est_c$phi,
